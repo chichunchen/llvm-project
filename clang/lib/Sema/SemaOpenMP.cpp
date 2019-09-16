@@ -50,8 +50,28 @@ enum DefaultDataSharingAttributes {
 
 /// Attributes of the defaultmap clause.
 enum DefaultMapAttributes {
-  DMA_unspecified,   /// Default mapping is not specified.
-  DMA_tofrom_scalar, /// Default mapping is 'tofrom:scalar'.
+  DMA_unspecified,             /// Default mapping is not specified.
+  DMA_alloc_scalar,            /// Default mapping is 'alloc:scalar'.
+  DMA_to_scalar,               /// Default mapping is 'to:scalar'.
+  DMA_from_scalar,             /// Default mapping is 'from:scalar'.
+  DMA_tofrom_scalar,           /// Default mapping is 'tofrom:scalar'.
+  DMA_firstprivate_scalar,     /// Default mapping is 'firstprivate:scalar'.
+  DMA_none_scalar,             /// Default mapping is 'none:scalar'.
+  DMA_default_scalar,          /// Default mapping is 'default:scalar'.
+  DMA_alloc_aggregate,         /// Default mapping is 'alloc:aggregate'.
+  DMA_to_aggregate,            /// Default mapping is 'to:aggregate'.
+  DMA_from_aggregate,          /// Default mapping is 'from:aggregate'.
+  DMA_tofrom_aggregate,        /// Default mapping is 'tofrom:aggregate'.
+  DMA_firstprivate_aggregate,  /// Default mapping is 'firstprivate:aggregate'.
+  DMA_none_aggregate,          /// Default mapping is 'none:aggregate'.
+  DMA_default_aggregate,       /// Default mapping is 'default:aggregate'.
+  DMA_alloc_pointer,           /// Default mapping is 'alloc:pointer'.
+  DMA_to_pointer,              /// Default mapping is 'to:pointer'.
+  DMA_from_pointer,            /// Default mapping is 'from:pointer'.
+  DMA_tofrom_pointer,          /// Default mapping is 'tofrom:pointer'.
+  DMA_firstprivate_pointer,    /// Default mapping is 'firstprivate:pointer'.
+  DMA_none_pointer,            /// Default mapping is 'none:pointer'.
+  DMA_default_pointer,         /// Default mapping is 'default:pointer'.
 };
 
 /// Stack for tracking declarations used in OpenMP directives and
@@ -592,9 +612,109 @@ public:
     getTopOfStack().DefaultAttr = DSA_shared;
     getTopOfStack().DefaultAttrLoc = Loc;
   }
+  /// Set default data mapping attribute to 'alloc:scalar'.
+  void setDefaultDMAAllocScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_alloc_scalar;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'to:scalar'.
+  void setDefaultDMAToScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_to_scalar;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'from:scalar'.
+  void setDefaultDMAFromScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_from_scalar;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
   /// Set default data mapping attribute to 'tofrom:scalar'.
   void setDefaultDMAToFromScalar(SourceLocation Loc) {
     getTopOfStack().DefaultMapAttr = DMA_tofrom_scalar;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'firstprivate:scalar'.
+  void setDefaultDMAFirstprivateScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_firstprivate_scalar;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'none:scalar'.
+  void setDefaultDMANoneScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_none_scalar;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'default:scalar'.
+  void setDefaultDMADefaultScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_default_scalar;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'alloc:aggregate'.
+  void setDefaultDMAAllocAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_alloc_aggregate;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'to:aggregate'.
+  void setDefaultDMAToAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_to_aggregate;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'from:aggregate'.
+  void setDefaultDMAFromAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_from_aggregate;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'tofrom:aggregate'.
+  void setDefaultDMAToFromAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_tofrom_aggregate;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'firstprivate:aggregate'.
+  void setDefaultDMAFirstprivateAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_firstprivate_aggregate;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'none:aggregate'.
+  void setDefaultDMANoneAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_none_aggregate;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'default:aggregate'.
+  void setDefaultDMADefaultAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_default_aggregate;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'alloc:pointer'.
+  void setDefaultDMAAllocPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_alloc_pointer;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'to:pointer'.
+  void setDefaultDMAToPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_to_pointer;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'from:pointer'.
+  void setDefaultDMAFromPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_from_pointer;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'tofrom:pointer'.
+  void setDefaultDMAToFromPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_tofrom_pointer;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'firstprivate:pointer'.
+  void setDefaultDMAFirstprivatePointer(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_firstprivate_pointer;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'none:pointer'.
+  void setDefaultDMANonePointer(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_none_pointer;
+    getTopOfStack().DefaultMapAttrLoc = Loc;
+  }
+  /// Set default data mapping attribute to 'default:pointer'.
+  void setDefaultDMADefaultPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultMapAttr = DMA_default_pointer;
     getTopOfStack().DefaultMapAttrLoc = Loc;
   }
 
@@ -15720,26 +15840,108 @@ OMPClause *Sema::ActOnOpenMPDefaultmapClause(
     OpenMPDefaultmapClauseModifier M, OpenMPDefaultmapClauseKind Kind,
     SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation MLoc,
     SourceLocation KindLoc, SourceLocation EndLoc) {
-  // OpenMP 4.5 only supports 'defaultmap(tofrom: scalar)'
-  if (M != OMPC_DEFAULTMAP_MODIFIER_tofrom || Kind != OMPC_DEFAULTMAP_scalar) {
+  if ((M != OMPC_DEFAULTMAP_MODIFIER_alloc && M != OMPC_DEFAULTMAP_MODIFIER_to &&
+      M != OMPC_DEFAULTMAP_MODIFIER_from && M != OMPC_DEFAULTMAP_MODIFIER_tofrom &&
+      M != OMPC_DEFAULTMAP_MODIFIER_firstprivate && M != OMPC_DEFAULTMAP_MODIFIER_none &&
+      M != OMPC_DEFAULTMAP_MODIFIER_default) ||
+      (Kind != OMPC_DEFAULTMAP_scalar && Kind != OMPC_DEFAULTMAP_aggregate &&
+       Kind != OMPC_DEFAULTMAP_pointer)) {
     std::string Value;
     SourceLocation Loc;
-    Value += "'";
-    if (M != OMPC_DEFAULTMAP_MODIFIER_tofrom) {
-      Value += getOpenMPSimpleClauseTypeName(OMPC_defaultmap,
-                                             OMPC_DEFAULTMAP_MODIFIER_tofrom);
+    Value += "[";
+    if (M != OMPC_DEFAULTMAP_MODIFIER_to && M != OMPC_DEFAULTMAP_MODIFIER_from &&
+      M != OMPC_DEFAULTMAP_MODIFIER_tofrom && M != OMPC_DEFAULTMAP_MODIFIER_firstprivate &&
+      M != OMPC_DEFAULTMAP_MODIFIER_none && M != OMPC_DEFAULTMAP_MODIFIER_default) {
+      Value += "'alloc', 'from', 'to', 'tofrom', 'firstprivate', 'none', 'default'";
       Loc = MLoc;
     } else {
-      Value += getOpenMPSimpleClauseTypeName(OMPC_defaultmap,
-                                             OMPC_DEFAULTMAP_scalar);
+      Value += "'scalar', 'aggregate', 'pointer'";
       Loc = KindLoc;
     }
-    Value += "'";
+    Value += "]";
     Diag(Loc, diag::err_omp_unexpected_clause_value)
         << Value << getOpenMPClauseName(OMPC_defaultmap);
     return nullptr;
   }
-  DSAStack->setDefaultDMAToFromScalar(StartLoc);
+  if (Kind == OMPC_DEFAULTMAP_scalar) {
+    switch (M) {
+      case OMPC_DEFAULTMAP_MODIFIER_alloc:
+        DSAStack->setDefaultDMAAllocScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_to:
+        DSAStack->setDefaultDMAToScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_from:
+        DSAStack->setDefaultDMAFromScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_tofrom:
+        DSAStack->setDefaultDMAToFromScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_firstprivate:
+        DSAStack->setDefaultDMAFirstprivateScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_none:
+        DSAStack->setDefaultDMANoneScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_default:
+        DSAStack->setDefaultDMADefaultScalar(StartLoc);
+        break;
+      default:
+        llvm_unreachable("Unknown OMPC_DEFAULTMAP_MODIFIER");
+    }
+  } else if (Kind == OMPC_DEFAULTMAP_aggregate) {
+    switch (M) {
+      case OMPC_DEFAULTMAP_MODIFIER_alloc:
+        DSAStack->setDefaultDMAAllocAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_to:
+        DSAStack->setDefaultDMAToAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_from:
+        DSAStack->setDefaultDMAFromAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_tofrom:
+        DSAStack->setDefaultDMAToFromAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_firstprivate:
+        DSAStack->setDefaultDMAFirstprivateAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_none:
+        DSAStack->setDefaultDMANoneAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_default:
+        DSAStack->setDefaultDMADefaultAggregate(StartLoc);
+        break;
+      default:
+        llvm_unreachable("Unknown OMPC_DEFAULTMAP_MODIFIER");
+    }
+  } else {
+    switch (M) {
+      case OMPC_DEFAULTMAP_MODIFIER_alloc:
+        DSAStack->setDefaultDMAAllocPointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_to:
+        DSAStack->setDefaultDMAToPointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_from:
+        DSAStack->setDefaultDMAFromPointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_tofrom:
+        DSAStack->setDefaultDMAToFromPointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_firstprivate:
+        DSAStack->setDefaultDMAFirstprivatePointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_none:
+        DSAStack->setDefaultDMANonePointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_default:
+        DSAStack->setDefaultDMADefaultPointer(StartLoc);
+        break;
+      default:
+        llvm_unreachable("Unknown OMPC_DEFAULTMAP_MODIFIER");
+    }
+  }
 
   return new (Context)
       OMPDefaultmapClause(StartLoc, LParenLoc, MLoc, KindLoc, EndLoc, Kind, M);

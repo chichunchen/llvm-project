@@ -47,7 +47,47 @@ T tmain(T argc, T *argv) {
   foo();
 #pragma omp target depend(in : argc, argv[i:argc], a[:])
   foo();
+#pragma omp target defaultmap(alloc: scalar)
+  foo();
+#pragma omp target defaultmap(to: scalar)
+  foo();
+#pragma omp target defaultmap(from: scalar)
+  foo();
 #pragma omp target defaultmap(tofrom: scalar)
+  foo();
+#pragma omp target defaultmap(firstprivate: scalar)
+  foo();
+#pragma omp target defaultmap(none: scalar)
+  foo();
+#pragma omp target defaultmap(default: scalar)
+  foo();
+#pragma omp target defaultmap(alloc: aggregate)
+  foo();
+#pragma omp target defaultmap(to: aggregate)
+  foo();
+#pragma omp target defaultmap(from: aggregate)
+  foo();
+#pragma omp target defaultmap(tofrom: aggregate)
+  foo();
+#pragma omp target defaultmap(firstprivate: aggregate)
+  foo();
+#pragma omp target defaultmap(none: aggregate)
+  foo();
+#pragma omp target defaultmap(default: aggregate)
+  foo();
+#pragma omp target defaultmap(alloc: pointer)
+  foo();
+#pragma omp target defaultmap(to: pointer)
+  foo();
+#pragma omp target defaultmap(from: pointer)
+  foo();
+#pragma omp target defaultmap(tofrom: pointer)
+  foo();
+#pragma omp target defaultmap(firstprivate: pointer)
+  foo();
+#pragma omp target defaultmap(none: pointer)
+  foo();
+#pragma omp target defaultmap(default: pointer)
   foo();
   return 0;
 }
@@ -96,7 +136,47 @@ T tmain(T argc, T *argv) {
 // CHECK-NEXT: foo()
 // CHECK-NEXT: #pragma omp target depend(in : argc,argv[i:argc],a[:])
 // CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: scalar)
+// CHECK-NEXT: foo()
 // CHECK-NEXT: #pragma omp target defaultmap(tofrom: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(tofrom: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(tofrom: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: pointer)
 // CHECK-NEXT: foo()
 // CHECK: template<> int tmain<int, 5>(int argc, int *argv) {
 // CHECK-NEXT: int i, j, a[20]
@@ -142,7 +222,47 @@ T tmain(T argc, T *argv) {
 // CHECK-NEXT: foo()
 // CHECK-NEXT: #pragma omp target depend(in : argc,argv[i:argc],a[:])
 // CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: scalar)
+// CHECK-NEXT: foo()
 // CHECK-NEXT: #pragma omp target defaultmap(tofrom: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(tofrom: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(tofrom: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: pointer)
 // CHECK-NEXT: foo()
 // CHECK: template<> char tmain<char, 1>(char argc, char *argv) {
 // CHECK-NEXT: char i, j, a[20]
@@ -188,7 +308,47 @@ T tmain(T argc, T *argv) {
 // CHECK-NEXT: foo()
 // CHECK-NEXT: #pragma omp target depend(in : argc,argv[i:argc],a[:])
 // CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: scalar)
+// CHECK-NEXT: foo()
 // CHECK-NEXT: #pragma omp target defaultmap(tofrom: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: scalar)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(tofrom: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: aggregate)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(to: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(from: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(tofrom: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(none: pointer)
+// CHECK-NEXT: foo()
+// CHECK-NEXT: #pragma omp target defaultmap(default: pointer)
 // CHECK-NEXT: foo()
 
 // CHECK-LABEL: class S {
@@ -319,8 +479,108 @@ int main (int argc, char **argv) {
   foo();
 // CHECK-NEXT: foo();
 
+#pragma omp target defaultmap(alloc: scalar)
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: scalar)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(to: scalar)
+// CHECK-NEXT: #pragma omp target defaultmap(to: scalar)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(from: scalar)
+// CHECK-NEXT: #pragma omp target defaultmap(from: scalar)
+  foo();
+// CHECK-NEXT: foo();
+
 #pragma omp target defaultmap(tofrom: scalar)
 // CHECK-NEXT: #pragma omp target defaultmap(tofrom: scalar)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(firstprivate: scalar)
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: scalar)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(none: scalar)
+// CHECK-NEXT: #pragma omp target defaultmap(none: scalar)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(default: scalar)
+// CHECK-NEXT: #pragma omp target defaultmap(default: scalar)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(alloc: aggregate)
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: aggregate)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(to: aggregate)
+// CHECK-NEXT: #pragma omp target defaultmap(to: aggregate)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(from: aggregate)
+// CHECK-NEXT: #pragma omp target defaultmap(from: aggregate)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(tofrom: aggregate)
+// CHECK-NEXT: #pragma omp target defaultmap(tofrom: aggregate)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(firstprivate: aggregate)
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: aggregate)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(none: aggregate)
+// CHECK-NEXT: #pragma omp target defaultmap(none: aggregate)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(default: aggregate)
+// CHECK-NEXT: #pragma omp target defaultmap(default: aggregate)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(alloc: pointer)
+// CHECK-NEXT: #pragma omp target defaultmap(alloc: pointer)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(to: pointer)
+// CHECK-NEXT: #pragma omp target defaultmap(to: pointer)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(from: pointer)
+// CHECK-NEXT: #pragma omp target defaultmap(from: pointer)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(tofrom: pointer)
+// CHECK-NEXT: #pragma omp target defaultmap(tofrom: pointer)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(firstprivate: pointer)
+// CHECK-NEXT: #pragma omp target defaultmap(firstprivate: pointer)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(none: pointer)
+// CHECK-NEXT: #pragma omp target defaultmap(none: pointer)
+  foo();
+// CHECK-NEXT: foo();
+
+#pragma omp target defaultmap(default: pointer)
+// CHECK-NEXT: #pragma omp target defaultmap(default: pointer)
   foo();
 // CHECK-NEXT: foo();
 
