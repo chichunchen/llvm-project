@@ -50,8 +50,28 @@ enum DefaultDataSharingAttributes {
 
 /// Attributes of the defaultmap clause.
 enum DefaultMapAttributes {
-  DMA_unspecified,   /// Default mapping is not specified.
-  DMA_tofrom_scalar, /// Default mapping is 'tofrom:scalar'.
+  DMA_unspecified,             /// Default mapping is not specified.
+  DMA_alloc_scalar,            /// Default mapping is 'alloc:scalar'.
+  DMA_to_scalar,               /// Default mapping is 'to:scalar'.
+  DMA_from_scalar,             /// Default mapping is 'from:scalar'.
+  DMA_tofrom_scalar,           /// Default mapping is 'tofrom:scalar'.
+  DMA_firstprivate_scalar,     /// Default mapping is 'firstprivate:scalar'.
+  DMA_none_scalar,             /// Default mapping is 'none:scalar'.
+  DMA_default_scalar,          /// Default mapping is 'default:scalar'.
+  DMA_alloc_aggregate,         /// Default mapping is 'alloc:aggregate'.
+  DMA_to_aggregate,            /// Default mapping is 'to:aggregate'.
+  DMA_from_aggregate,          /// Default mapping is 'from:aggregate'.
+  DMA_tofrom_aggregate,        /// Default mapping is 'tofrom:aggregate'.
+  DMA_firstprivate_aggregate,  /// Default mapping is 'firstprivate:aggregate'.
+  DMA_none_aggregate,          /// Default mapping is 'none:aggregate'.
+  DMA_default_aggregate,       /// Default mapping is 'default:aggregate'.
+  DMA_alloc_pointer,           /// Default mapping is 'alloc:pointer'.
+  DMA_to_pointer,              /// Default mapping is 'to:pointer'.
+  DMA_from_pointer,            /// Default mapping is 'from:pointer'.
+  DMA_tofrom_pointer,          /// Default mapping is 'tofrom:pointer'.
+  DMA_firstprivate_pointer,    /// Default mapping is 'firstprivate:pointer'.
+  DMA_none_pointer,            /// Default mapping is 'none:pointer'.
+  DMA_default_pointer,         /// Default mapping is 'default:pointer'.
 };
 
 /// Stack for tracking declarations used in OpenMP directives and
@@ -124,8 +144,8 @@ private:
     LoopControlVariablesMapTy LCVMap;
     DefaultDataSharingAttributes DefaultAttr = DSA_unspecified;
     SourceLocation DefaultAttrLoc;
-    DefaultMapAttributes DefaultMapAttr = DMA_unspecified;
-    SourceLocation DefaultMapAttrLoc;
+    llvm::SmallVector<std::pair<DefaultMapAttributes, SourceLocation>, 3>
+      DefaultmapMap{3, std::make_pair(DMA_unspecified, SourceLocation())};
     OpenMPDirectiveKind Directive = OMPD_unknown;
     DeclarationNameInfo DirectiveName;
     Scope *CurScope = nullptr;
@@ -592,10 +612,115 @@ public:
     getTopOfStack().DefaultAttr = DSA_shared;
     getTopOfStack().DefaultAttrLoc = Loc;
   }
+  /// Set default data mapping attribute to 'alloc:scalar'.
+  void setDefaultDMAAllocScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_scalar] =
+      std::make_pair(DMA_alloc_scalar, Loc);
+  }
+  /// Set default data mapping attribute to 'to:scalar'.
+  void setDefaultDMAToScalar(SourceLocation Loc) {
+    getTopOfStack(). DefaultmapMap[OMPC_DEFAULTMAP_scalar] =
+      std::make_pair(DMA_to_scalar, Loc);
+  }
+  /// Set default data mapping attribute to 'from:scalar'.
+  void setDefaultDMAFromScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_scalar] =
+      std::make_pair(DMA_from_scalar, Loc);
+  }
   /// Set default data mapping attribute to 'tofrom:scalar'.
   void setDefaultDMAToFromScalar(SourceLocation Loc) {
-    getTopOfStack().DefaultMapAttr = DMA_tofrom_scalar;
-    getTopOfStack().DefaultMapAttrLoc = Loc;
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_scalar] =
+      std::make_pair(DMA_tofrom_scalar, Loc);
+  }
+  /// Set default data mapping attribute to 'firstprivate:scalar'.
+  void setDefaultDMAFirstprivateScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_scalar] =
+      std::make_pair(DMA_firstprivate_scalar, Loc);
+  }
+  /// Set default data mapping attribute to 'none:scalar'.
+  void setDefaultDMANoneScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_scalar] =
+      std::make_pair(DMA_none_scalar, Loc);
+  }
+  /// Set default data mapping attribute to 'default:scalar'.
+  void setDefaultDMADefaultScalar(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_scalar] =
+      std::make_pair(DMA_default_scalar, Loc);
+  }
+  /// Set default data mapping attribute to 'alloc:aggregate'.
+  void setDefaultDMAAllocAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_aggregate] =
+      std::make_pair(DMA_alloc_aggregate, Loc);
+  }
+  /// Set default data mapping attribute to 'to:aggregate'.
+  void setDefaultDMAToAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_aggregate] =
+      std::make_pair(DMA_to_aggregate, Loc);
+  }
+  /// Set default data mapping attribute to 'from:aggregate'.
+  void setDefaultDMAFromAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_aggregate] =
+      std::make_pair(DMA_from_aggregate, Loc);
+  }
+  /// Set default data mapping attribute to 'tofrom:aggregate'.
+  void setDefaultDMAToFromAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_aggregate] =
+      std::make_pair(DMA_tofrom_aggregate, Loc);
+  }
+  /// Set default data mapping attribute to 'firstprivate:aggregate'.
+  void setDefaultDMAFirstprivateAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_aggregate] =
+      std::make_pair(DMA_firstprivate_aggregate, Loc);
+  }
+  /// Set default data mapping attribute to 'none:aggregate'.
+  void setDefaultDMANoneAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_aggregate] =
+      std::make_pair(DMA_none_aggregate, Loc);
+  }
+  /// Set default data mapping attribute to 'default:aggregate'.
+  void setDefaultDMADefaultAggregate(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_aggregate] =
+      std::make_pair(DMA_default_aggregate, Loc);
+  }
+  /// Set default data mapping attribute to 'alloc:pointer'.
+  void setDefaultDMAAllocPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_pointer] =
+      std::make_pair(DMA_alloc_pointer, Loc);
+  }
+  /// Set default data mapping attribute to 'to:pointer'.
+  void setDefaultDMAToPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_pointer] =
+      std::make_pair(DMA_to_pointer, Loc);
+  }
+  /// Set default data mapping attribute to 'from:pointer'.
+  void setDefaultDMAFromPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_pointer] =
+      std::make_pair(DMA_from_pointer, Loc);
+  }
+  /// Set default data mapping attribute to 'tofrom:pointer'.
+  void setDefaultDMAToFromPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_pointer] =
+      std::make_pair(DMA_tofrom_pointer, Loc);
+  }
+  /// Set default data mapping attribute to 'firstprivate:pointer'.
+  void setDefaultDMAFirstprivatePointer(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_pointer] =
+      std::make_pair(DMA_firstprivate_pointer, Loc);
+  }
+  /// Set default data mapping attribute to 'none:pointer'.
+  void setDefaultDMANonePointer(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_pointer] =
+      std::make_pair(DMA_none_pointer, Loc);
+  }
+  /// Set default data mapping attribute to 'default:pointer'.
+  void setDefaultDMADefaultPointer(SourceLocation Loc) {
+    getTopOfStack().DefaultmapMap[OMPC_DEFAULTMAP_pointer] =
+      std::make_pair(DMA_default_pointer, Loc);
+  }
+
+  bool hasSetDefaultmapCategory(OpenMPDefaultmapClauseKind VariableCategory) {
+    int VC = static_cast<int>(VariableCategory);
+    return getTopOfStack().DefaultmapMap[VC].first != DMA_unspecified;
   }
 
   DefaultDataSharingAttributes getDefaultDSA() const {
@@ -606,16 +731,18 @@ public:
     return isStackEmpty() ? SourceLocation()
                           : getTopOfStack().DefaultAttrLoc;
   }
-  DefaultMapAttributes getDefaultDMA() const {
+  DefaultMapAttributes getDefaultDMA(OpenMPDefaultmapClauseKind VariableCategory) const {
     return isStackEmpty() ? DMA_unspecified
-                          : getTopOfStack().DefaultMapAttr;
+                          : getTopOfStack().DefaultmapMap[VariableCategory].first;
   }
-  DefaultMapAttributes getDefaultDMAAtLevel(unsigned Level) const {
-    return getStackElemAtLevel(Level).DefaultMapAttr;
+  DefaultMapAttributes getDefaultDMAAtLevel(unsigned Level,
+                          OpenMPDefaultmapClauseKind VariableCategory) const {
+    return getStackElemAtLevel(Level).DefaultmapMap[VariableCategory].first;
   }
-  SourceLocation getDefaultDMALocation() const {
+  SourceLocation getDefaultDMALocation(
+    OpenMPDefaultmapClauseKind VariableCategory) const {
     return isStackEmpty() ? SourceLocation()
-                          : getTopOfStack().DefaultMapAttrLoc;
+                          : getTopOfStack().DefaultmapMap[VariableCategory].second;
   }
 
   /// Checks if the specified variable is a threadprivate.
@@ -1865,7 +1992,16 @@ bool Sema::isOpenMPCapturedByRef(const ValueDecl *D, unsigned Level,
           (DSAStack->isForceCaptureByReferenceInTargetExecutable() &&
            !Ty->isAnyPointerType()) ||
           !Ty->isScalarType() ||
-          DSAStack->getDefaultDMAAtLevel(Level) == DMA_tofrom_scalar ||
+          (DSAStack->getDefaultDMAAtLevel(Level, OMPC_DEFAULTMAP_scalar) ==
+           DMA_alloc_scalar ||
+           DSAStack->getDefaultDMAAtLevel(Level, OMPC_DEFAULTMAP_scalar) ==
+           DMA_to_scalar ||
+           DSAStack->getDefaultDMAAtLevel(Level, OMPC_DEFAULTMAP_scalar) ==
+           DMA_from_scalar ||
+           DSAStack->getDefaultDMAAtLevel(Level, OMPC_DEFAULTMAP_scalar) ==
+           DMA_tofrom_scalar ||
+           DSAStack->getDefaultDMAAtLevel(Level, OMPC_DEFAULTMAP_scalar) ==
+           DMA_firstprivate_scalar) ||
           DSAStack->hasExplicitDSA(
               D, [](OpenMPClauseKind K) { return K == OMPC_reduction; }, Level);
     }
@@ -2078,9 +2214,28 @@ void Sema::setOpenMPCaptureKind(FieldDecl *FD, const ValueDecl *D,
     if (DSAStack->hasExplicitDirective(isOpenMPTargetExecutionDirective,
                                        NewLevel)) {
       OMPC = OMPC_map;
-      if (D->getType()->isScalarType() &&
-          DSAStack->getDefaultDMAAtLevel(NewLevel) !=
-              DefaultMapAttributes::DMA_tofrom_scalar)
+      if ((D->getType()->isScalarType() &&
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) !=
+              DefaultMapAttributes::DMA_alloc_scalar &&
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) !=
+              DefaultMapAttributes::DMA_to_scalar &&
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) !=
+              DefaultMapAttributes::DMA_from_scalar &&
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) !=
+              DefaultMapAttributes::DMA_tofrom_scalar &&
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) !=
+              DefaultMapAttributes::DMA_firstprivate_scalar) &&
+          !(D->getType()->isPointerType() &&
+          (DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) ==
+              DefaultMapAttributes::DMA_alloc_pointer ||
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) ==
+              DefaultMapAttributes::DMA_to_pointer ||
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) ==
+              DefaultMapAttributes::DMA_from_pointer ||
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) ==
+              DefaultMapAttributes::DMA_tofrom_pointer ||
+          DSAStack->getDefaultDMAAtLevel(NewLevel, OMPC_DEFAULTMAP_scalar) ==
+              DefaultMapAttributes::DMA_firstprivate_pointer)))
         OMPC = OMPC_firstprivate;
       break;
     }
@@ -2852,6 +3007,49 @@ public:
         return;
       }
 
+      // OpenMP 5.0 [2.19.7.2, defaultmap clause, Description]
+      // If implicit-behavior is none, each variable referenced in the
+      // construct that does not have a predetermined data-sharing attribute
+      // and does not appear in a to or link clause on a declare target
+      // directive must be listed in a data-mapping attribute clause, a
+      // data-haring attribute clause (including a data-sharing attribute
+      // clause on a combined construct where target. is one of the
+      // constituent constructs), or an is_device_ptr clause.
+      bool IsDMAAttrNone = false;
+      if (VD->getType()->isPointerType() || VD->getType()->isMemberPointerType()) {
+        IsDMAAttrNone =
+          Stack->getDefaultDMA(OMPC_DEFAULTMAP_pointer) == DMA_none_pointer;
+      } else if (VD->getType()->isScalarType() &&
+                 !VD->getType()->isBlockPointerType() &&
+                 !VD->getType()->isObjCObjectPointerType()) {
+        IsDMAAttrNone =
+          Stack->getDefaultDMA(OMPC_DEFAULTMAP_scalar) == DMA_none_scalar;
+      } else if (VD->getType()->isArrayType() || VD->getType()->isRecordType()) {
+        IsDMAAttrNone =
+          Stack->getDefaultDMA(OMPC_DEFAULTMAP_aggregate) == DMA_none_aggregate;
+      }
+
+      if (DVar.CKind == OMPC_unknown && IsDMAAttrNone &&
+          VarsWithInheritedDSA.count(VD) == 0 &&
+          (!(isOpenMPTargetExecutionDirective(DKind) && Res &&
+             (*Res == OMPDeclareTargetDeclAttr::MT_Link ||
+              *Res == OMPDeclareTargetDeclAttr::MT_To)))) {
+        // Only check for data-mapping attribute and is_device_ptr here
+        // since we have already make sure that the declaration does not
+        // have a data-sharing attribute above
+        if (!Stack->checkMappableExprComponentListsForDecl(
+          VD, /*CurrentRegionOnly=*/true,
+          [VD](OMPClauseMappableExprCommon::MappableExprComponentListRef
+              MapExprComponents, OpenMPClauseKind) {
+            auto MI = MapExprComponents.rbegin();
+            auto ME = MapExprComponents.rend();
+            return MI != ME && MI->getAssociatedDeclaration() == VD;
+          })) {
+          VarsWithInheritedDSA[VD] = E;
+          return;
+        }
+      }
+
       if (isOpenMPTargetExecutionDirective(DKind) &&
           !Stack->isLoopControlVariable(VD).first) {
         if (!Stack->checkMappableExprComponentListsForDecl(
@@ -2882,8 +3080,28 @@ public:
             IsFirstprivate = RD->isLambda();
           IsFirstprivate =
               IsFirstprivate ||
-              (VD->getType().getNonReferenceType()->isScalarType() &&
-               Stack->getDefaultDMA() != DMA_tofrom_scalar && !Res);
+              (((VD->getType().getNonReferenceType()->isScalarType() &&
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_scalar) !=
+                 DMA_alloc_scalar &&
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_scalar) !=
+                 DMA_to_scalar &&
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_scalar) !=
+                 DMA_from_scalar &&
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_scalar) !=
+                 DMA_tofrom_scalar &&
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_scalar) !=
+                 DMA_firstprivate_scalar) &&
+               !(VD->getType().getNonReferenceType()->isPointerType() &&
+               (Stack->getDefaultDMA(OMPC_DEFAULTMAP_pointer) ==
+                  DMA_alloc_pointer ||
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_pointer) ==
+                  DMA_to_pointer ||
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_pointer) ==
+                  DMA_from_pointer ||
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_pointer) ==
+                  DMA_tofrom_pointer ||
+               Stack->getDefaultDMA(OMPC_DEFAULTMAP_pointer) ==
+                  DMA_firstprivate_pointer))) && !Res);
           if (IsFirstprivate)
             ImplicitFirstprivate.emplace_back(E);
           else
@@ -4213,11 +4431,13 @@ StmtResult Sema::ActOnOpenMPExecutableDirective(
   VarsWithInheritedDSAType VarsWithInheritedDSA;
   bool ErrorFound = false;
   ClausesWithImplicit.append(Clauses.begin(), Clauses.end());
+
   if (AStmt && !CurContext->isDependentContext()) {
     assert(isa<CapturedStmt>(AStmt) && "Captured statement expected");
 
     // Check default data sharing attributes for referenced variables.
     DSAAttrChecker DSAChecker(DSAStack, *this, cast<CapturedStmt>(AStmt));
+
     int ThisCaptureLevel = getOpenMPCaptureLevels(Kind);
     Stmt *S = AStmt;
     while (--ThisCaptureLevel >= 0)
@@ -4618,13 +4838,20 @@ StmtResult Sema::ActOnOpenMPExecutableDirective(
     for (auto &P : DSAChecker.getVarsWithInheritedDSA())
       VarsWithInheritedDSA[P.getFirst()] = P.getSecond();
   }
+
   for (const auto &P : VarsWithInheritedDSA) {
     if (P.getFirst()->isImplicit() || isa<OMPCapturedExprDecl>(P.getFirst()))
       continue;
     ErrorFound = true;
-    Diag(P.second->getExprLoc(), diag::err_omp_no_dsa_for_variable)
-        << P.first << P.second->getSourceRange();
-    Diag(DSAStack->getDefaultDSALocation(), diag::note_omp_default_dsa_none);
+    if (DSAStack->getDefaultDSA() == DSA_none) {
+      Diag(P.second->getExprLoc(), diag::err_omp_no_dsa_for_variable)
+          << P.first << P.second->getSourceRange();
+      Diag(DSAStack->getDefaultDSALocation(), diag::note_omp_default_dsa_none);
+    } else {
+      Diag(P.second->getExprLoc(), diag::err_omp_defaultmap_no_attr_for_variable)
+          << P.first << P.second->getSourceRange();
+      Diag(DSAStack->getDefaultDSALocation(), diag::note_omp_defaultmap_attr_none);
+    }
   }
 
   if (!AllowedNameModifiers.empty())
@@ -15796,26 +16023,119 @@ OMPClause *Sema::ActOnOpenMPDefaultmapClause(
     OpenMPDefaultmapClauseModifier M, OpenMPDefaultmapClauseKind Kind,
     SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation MLoc,
     SourceLocation KindLoc, SourceLocation EndLoc) {
-  // OpenMP 4.5 only supports 'defaultmap(tofrom: scalar)'
-  if (M != OMPC_DEFAULTMAP_MODIFIER_tofrom || Kind != OMPC_DEFAULTMAP_scalar) {
+  if ((M != OMPC_DEFAULTMAP_MODIFIER_alloc && M != OMPC_DEFAULTMAP_MODIFIER_to &&
+      M != OMPC_DEFAULTMAP_MODIFIER_from && M != OMPC_DEFAULTMAP_MODIFIER_tofrom &&
+      M != OMPC_DEFAULTMAP_MODIFIER_firstprivate && M != OMPC_DEFAULTMAP_MODIFIER_none &&
+      M != OMPC_DEFAULTMAP_MODIFIER_default) ||
+      (Kind != OMPC_DEFAULTMAP_scalar && Kind != OMPC_DEFAULTMAP_aggregate &&
+       Kind != OMPC_DEFAULTMAP_pointer)) {
     std::string Value;
     SourceLocation Loc;
-    Value += "'";
-    if (M != OMPC_DEFAULTMAP_MODIFIER_tofrom) {
-      Value += getOpenMPSimpleClauseTypeName(OMPC_defaultmap,
-                                             OMPC_DEFAULTMAP_MODIFIER_tofrom);
+    Value += "[";
+    if (M != OMPC_DEFAULTMAP_MODIFIER_to && M != OMPC_DEFAULTMAP_MODIFIER_from &&
+      M != OMPC_DEFAULTMAP_MODIFIER_tofrom && M != OMPC_DEFAULTMAP_MODIFIER_firstprivate &&
+      M != OMPC_DEFAULTMAP_MODIFIER_none && M != OMPC_DEFAULTMAP_MODIFIER_default) {
+      Value += "'alloc', 'from', 'to', 'tofrom', 'firstprivate', 'none', 'default'";
       Loc = MLoc;
     } else {
-      Value += getOpenMPSimpleClauseTypeName(OMPC_defaultmap,
-                                             OMPC_DEFAULTMAP_scalar);
+      Value += "'scalar', 'aggregate', 'pointer'";
       Loc = KindLoc;
     }
-    Value += "'";
+    Value += "]";
     Diag(Loc, diag::err_omp_unexpected_clause_value)
         << Value << getOpenMPClauseName(OMPC_defaultmap);
     return nullptr;
   }
-  DSAStack->setDefaultDMAToFromScalar(StartLoc);
+
+  // OpenMP [5.0, 2.12.5, Restrictions, p. 174]
+  //  At most one defaultmap clause for each category can appear on the
+  //  directive.
+  if (DSAStack->hasSetDefaultmapCategory(Kind)) {
+    Diag(StartLoc, diag::err_omp_one_defaultmap_each_category);
+    return nullptr;
+  }
+
+  if (Kind == OMPC_DEFAULTMAP_scalar) {
+    switch (M) {
+      case OMPC_DEFAULTMAP_MODIFIER_alloc:
+        DSAStack->setDefaultDMAAllocScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_to:
+        DSAStack->setDefaultDMAToScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_from:
+        DSAStack->setDefaultDMAFromScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_tofrom:
+        DSAStack->setDefaultDMAToFromScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_firstprivate:
+        DSAStack->setDefaultDMAFirstprivateScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_none:
+        DSAStack->setDefaultDMANoneScalar(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_default:
+        DSAStack->setDefaultDMADefaultScalar(StartLoc);
+        break;
+      default:
+        llvm_unreachable("Unknown OMPC_DEFAULTMAP_MODIFIER");
+    }
+  } else if (Kind == OMPC_DEFAULTMAP_aggregate) {
+    switch (M) {
+      case OMPC_DEFAULTMAP_MODIFIER_alloc:
+        DSAStack->setDefaultDMAAllocAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_to:
+        DSAStack->setDefaultDMAToAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_from:
+        DSAStack->setDefaultDMAFromAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_tofrom:
+        DSAStack->setDefaultDMAToFromAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_firstprivate:
+        DSAStack->setDefaultDMAFirstprivateAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_none:
+        DSAStack->setDefaultDMANoneAggregate(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_default:
+        DSAStack->setDefaultDMADefaultAggregate(StartLoc);
+        break;
+      default:
+        llvm_unreachable("Unknown OMPC_DEFAULTMAP_MODIFIER");
+    }
+  } else if (Kind == OMPC_DEFAULTMAP_pointer) {
+    switch (M) {
+      case OMPC_DEFAULTMAP_MODIFIER_alloc:
+        DSAStack->setDefaultDMAAllocPointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_to:
+        DSAStack->setDefaultDMAToPointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_from:
+        DSAStack->setDefaultDMAFromPointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_tofrom:
+        DSAStack->setDefaultDMAToFromPointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_firstprivate:
+        DSAStack->setDefaultDMAFirstprivatePointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_none:
+        DSAStack->setDefaultDMANonePointer(StartLoc);
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_default:
+        DSAStack->setDefaultDMADefaultPointer(StartLoc);
+        break;
+      default:
+        llvm_unreachable("Unknown OMPC_DEFAULTMAP_MODIFIER");
+    }
+  } else {
+    llvm_unreachable("Unknown OMPC_DEFAULTMAP_KIND");
+  }
 
   return new (Context)
       OMPDefaultmapClause(StartLoc, LParenLoc, MLoc, KindLoc, EndLoc, Kind, M);

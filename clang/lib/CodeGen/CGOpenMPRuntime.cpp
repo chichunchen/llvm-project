@@ -7370,32 +7370,72 @@ private:
   /// expression.
   OpenMPOffloadMappingFlags getMapTypeBits(
       OpenMPMapClauseKind MapType, ArrayRef<OpenMPMapModifierKind> MapModifiers,
-      bool IsImplicit, bool AddPtrFlag, bool AddIsTargetParamFlag) const {
+      bool IsImplicit, OpenMPDefaultmapClauseModifier ImplicitBehavior,
+      OpenMPDefaultmapClauseKind VariableCategory,
+      bool AddPtrFlag, bool AddIsTargetParamFlag) const {
     OpenMPOffloadMappingFlags Bits =
         IsImplicit ? OMP_MAP_IMPLICIT : OMP_MAP_NONE;
-    switch (MapType) {
-    case OMPC_MAP_alloc:
-    case OMPC_MAP_release:
-      // alloc and release is the default behavior in the runtime library,  i.e.
-      // if we don't pass any bits alloc/release that is what the runtime is
-      // going to do. Therefore, we don't need to signal anything for these two
-      // type modifiers.
-      break;
-    case OMPC_MAP_to:
-      Bits |= OMP_MAP_TO;
-      break;
-    case OMPC_MAP_from:
-      Bits |= OMP_MAP_FROM;
-      break;
-    case OMPC_MAP_tofrom:
-      Bits |= OMP_MAP_TO | OMP_MAP_FROM;
-      break;
-    case OMPC_MAP_delete:
-      Bits |= OMP_MAP_DELETE;
-      break;
-    case OMPC_MAP_unknown:
-      llvm_unreachable("Unexpected map type!");
+
+    // Set implicit behavior except for "default" for defaultmap
+    if ((Bits & OMP_MAP_IMPLICIT) &&
+        (ImplicitBehavior != OMPC_DEFAULTMAP_MODIFIER_default)) {
+      switch (ImplicitBehavior) {
+      case OMPC_DEFAULTMAP_MODIFIER_alloc:
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_to:
+        Bits |= OMP_MAP_TO;
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_from:
+        Bits |= OMP_MAP_FROM;
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_tofrom:
+        Bits |= OMP_MAP_TO | OMP_MAP_FROM;
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_firstprivate:
+        switch (VariableCategory) {
+        case OMPC_DEFAULTMAP_scalar:
+        case OMPC_DEFAULTMAP_pointer:
+          Bits |= OMP_MAP_LITERAL;
+          break;
+        case OMPC_DEFAULTMAP_aggregate:
+          Bits |= OMP_MAP_TO | OMP_MAP_PRIVATE;
+          break;
+        default:
+          llvm_unreachable("Unexpected variable category!");
+        }
+        break;
+      case OMPC_DEFAULTMAP_MODIFIER_none:
+        Bits = OMP_MAP_NONE;
+        break;
+      default:
+        llvm_unreachable("Unexpected implicit behavior!");
+      }
+    } else {
+      switch (MapType) {
+      case OMPC_MAP_alloc:
+      case OMPC_MAP_release:
+        // alloc and release is the default behavior in the runtime library,  i.e.
+        // if we don't pass any bits alloc/release that is what the runtime is
+        // going to do. Therefore, we don't need to signal anything for these two
+        // type modifiers.
+        break;
+      case OMPC_MAP_to:
+        Bits |= OMP_MAP_TO;
+        break;
+      case OMPC_MAP_from:
+        Bits |= OMP_MAP_FROM;
+        break;
+      case OMPC_MAP_tofrom:
+        Bits |= OMP_MAP_TO | OMP_MAP_FROM;
+        break;
+      case OMPC_MAP_delete:
+        Bits |= OMP_MAP_DELETE;
+        break;
+      case OMPC_MAP_unknown:
+        llvm_unreachable("Unexpected map type!");
+      }
     }
+
     if (AddPtrFlag)
       Bits |= OMP_MAP_PTR_AND_OBJ;
     if (AddIsTargetParamFlag)
@@ -7459,7 +7499,9 @@ private:
       MapBaseValuesArrayTy &BasePointers, MapValuesArrayTy &Pointers,
       MapValuesArrayTy &Sizes, MapFlagsArrayTy &Types,
       StructRangeInfoTy &PartialStruct, bool IsFirstComponentList,
-      bool IsImplicit,
+      bool IsImplicit, OpenMPDefaultmapClauseModifier ImplicitBehavior =
+          OMPC_DEFAULTMAP_MODIFIER_default,
+      OpenMPDefaultmapClauseKind VariableCategory = OMPC_DEFAULTMAP_unknown,
       ArrayRef<OMPClauseMappableExprCommon::MappableExprComponentListRef>
           OverlappedElements = llvm::None) const {
     // The following summarizes what has to be generated for each map and the
@@ -7778,6 +7820,7 @@ private:
           OpenMPOffloadMappingFlags Flags =
               OMP_MAP_MEMBER_OF |
               getMapTypeBits(MapType, MapModifiers, IsImplicit,
+                             ImplicitBehavior, VariableCategory,
                              /*AddPtrFlag=*/false,
                              /*AddIsTargetParamFlag=*/false);
           LB = BP;
@@ -7829,6 +7872,7 @@ private:
           // (there is a set of entries for each capture).
           OpenMPOffloadMappingFlags Flags = getMapTypeBits(
               MapType, MapModifiers, IsImplicit,
+              ImplicitBehavior, VariableCategory,
               !IsExpressionFirstInfo || RequiresReference,
               IsCaptureFirstInfo && !RequiresReference);
 
@@ -8421,13 +8465,14 @@ public:
     assert(CurDir.is<const OMPExecutableDirective *>() &&
            "Expect a executable directive");
     const auto *CurExecDir = CurDir.get<const OMPExecutableDirective *>();
+
     for (const auto *C : CurExecDir->getClausesOfKind<OMPMapClause>()) {
       for (const auto &L : C->decl_component_lists(VD)) {
         assert(L.first == VD &&
                "We got information for the wrong declaration??");
         assert(!L.second.empty() &&
                "Not expecting declaration with no component lists.");
-        DeclComponentLists.emplace_back(L.second, C->getMapType(),
+        DeclComponentLists.emplace_back(L.second, C->getMapType(),  // getMapType been hardcoded as tofrom
                                         C->getMapTypeModifiers(),
                                         C->isImplicit());
       }
@@ -8528,6 +8573,14 @@ public:
           });
     }
 
+    OpenMPDefaultmapClauseModifier ImplicitBehavior =
+      OMPC_DEFAULTMAP_MODIFIER_default;
+    OpenMPDefaultmapClauseKind VariableCategory = OMPC_DEFAULTMAP_unknown;
+    for (const auto *D : CurExecDir->getClausesOfKind<OMPDefaultmapClause>()) {
+      ImplicitBehavior = D->getDefaultmapModifier();
+      VariableCategory = D->getDefaultmapKind();
+    }
+
     // Associated with a capture, because the mapping flags depend on it.
     // Go through all of the elements with the overlapped elements.
     for (const auto &Pair : OverlappedData) {
@@ -8543,7 +8596,9 @@ public:
       generateInfoForComponentList(MapType, MapModifiers, Components,
                                    BasePointers, Pointers, Sizes, Types,
                                    PartialStruct, IsFirstComponentList,
-                                   IsImplicit, OverlappedComponents);
+                                   IsImplicit, ImplicitBehavior,
+                                   VariableCategory,
+                                   OverlappedComponents);
     }
     // Go through other elements without overlapped elements.
     bool IsFirstComponentList = OverlappedData.empty();
@@ -8558,7 +8613,8 @@ public:
         generateInfoForComponentList(MapType, MapModifiers, Components,
                                      BasePointers, Pointers, Sizes, Types,
                                      PartialStruct, IsFirstComponentList,
-                                     IsImplicit);
+                                     IsImplicit, ImplicitBehavior,
+                                     VariableCategory);
       IsFirstComponentList = false;
     }
   }

@@ -2030,18 +2030,15 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
     break;
   case OMPC_schedule:
   case OMPC_dist_schedule:
-  case OMPC_defaultmap:
     // OpenMP [2.7.1, Restrictions, p. 3]
     //  Only one schedule clause can appear on a loop directive.
-    // OpenMP [2.10.4, Restrictions, p. 106]
-    //  At most one defaultmap clause can appear on the directive.
     if (!FirstClause) {
       Diag(Tok, diag::err_omp_more_one_clause)
           << getOpenMPDirectiveName(DKind) << getOpenMPClauseName(CKind) << 0;
       ErrorFound = true;
     }
     LLVM_FALLTHROUGH;
-
+  case OMPC_defaultmap:
   case OMPC_if:
     Clause = ParseOpenMPSingleExprWithArgClause(CKind, WrongDirective);
     break;
