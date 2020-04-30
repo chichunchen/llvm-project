@@ -18,6 +18,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclOpenMP.h"
+#include "clang/AST/OpenMPClause.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtVisitor.h"
@@ -47,7 +48,8 @@ using namespace llvm::omp;
 static const Expr *checkMapClauseExpressionBase(
     Sema &SemaRef, Expr *E,
     OMPClauseMappableExprCommon::MappableExprComponentList &CurComponents,
-    OpenMPClauseKind CKind, bool NoDiagnose);
+    bool &IsNonContiguous, OpenMPClauseKind CKind, OpenMPDirectiveKind DKind,
+    bool NoDiagnose);
 
 namespace {
 /// Default data sharing attributes, which can be applied to directive.
@@ -3395,7 +3397,10 @@ public:
     }
     if (isOpenMPTargetExecutionDirective(DKind)) {
       OMPClauseMappableExprCommon::MappableExprComponentList CurComponents;
-      if (!checkMapClauseExpressionBase(SemaRef, E, CurComponents, OMPC_map,
+      bool IsNonContiguous = false;
+      if (!checkMapClauseExpressionBase(SemaRef, E, CurComponents,
+                                        IsNonContiguous, OMPC_map,
+                                        Stack->getCurrentDirective(),
                                         /*NoDiagnose=*/true))
         return;
       const auto *VD = cast<ValueDecl>(
@@ -16142,7 +16147,9 @@ namespace {
 class MapBaseChecker final : public StmtVisitor<MapBaseChecker, bool> {
   Sema &SemaRef;
   OpenMPClauseKind CKind = OMPC_unknown;
+  OpenMPDirectiveKind DKind = OMPD_unknown;
   OMPClauseMappableExprCommon::MappableExprComponentList &Components;
+  bool &IsNonContiguousRef;
   bool NoDiagnose = false;
   const Expr *RelevantExpr = nullptr;
   bool AllowUnitySizeArraySection = true;
@@ -16320,6 +16327,9 @@ public:
       // pointer. Otherwise, only unitary sections are accepted.
       if (NotWhole || IsPointer)
         AllowWholeSizeArraySection = false;
+    } else if (DKind == OMPD_target_update &&
+               SemaRef.getLangOpts().OpenMP >= 50) {
+      IsNonContiguousRef = true;
     } else if (AllowUnitySizeArraySection && NotUnity) {
       // A unity or whole array section is not allowed and that is not
       // compatible with the properties of the current array section.
@@ -16412,11 +16422,13 @@ public:
     return RelevantExpr;
   }
   explicit MapBaseChecker(
-      Sema &SemaRef, OpenMPClauseKind CKind,
+      Sema &SemaRef, OpenMPClauseKind CKind, OpenMPDirectiveKind DKind,
       OMPClauseMappableExprCommon::MappableExprComponentList &Components,
-      bool NoDiagnose, SourceLocation &ELoc, SourceRange &ERange)
-      : SemaRef(SemaRef), CKind(CKind), Components(Components),
-        NoDiagnose(NoDiagnose), ELoc(ELoc), ERange(ERange) {}
+      bool &IsNonContiguousTargetUpdate, bool NoDiagnose, SourceLocation &ELoc,
+      SourceRange &ERange)
+      : SemaRef(SemaRef), CKind(CKind), DKind(DKind), Components(Components),
+        IsNonContiguousRef(IsNonContiguousTargetUpdate), NoDiagnose(NoDiagnose),
+        ELoc(ELoc), ERange(ERange) {}
 };
 } // namespace
 
@@ -16427,11 +16439,12 @@ public:
 static const Expr *checkMapClauseExpressionBase(
     Sema &SemaRef, Expr *E,
     OMPClauseMappableExprCommon::MappableExprComponentList &CurComponents,
-    OpenMPClauseKind CKind, bool NoDiagnose) {
+    bool &IsNonContiguousTargetUpdate, OpenMPClauseKind CKind,
+    OpenMPDirectiveKind DKind, bool NoDiagnose) {
   SourceLocation ELoc = E->getExprLoc();
   SourceRange ERange = E->getSourceRange();
-  MapBaseChecker Checker(SemaRef, CKind, CurComponents, NoDiagnose, ELoc,
-                         ERange);
+  MapBaseChecker Checker(SemaRef, CKind, DKind, CurComponents,
+                         IsNonContiguousTargetUpdate, NoDiagnose, ELoc, ERange);
   if (Checker.Visit(E->IgnoreParens()))
     return Checker.getFoundBase();
   return nullptr;
@@ -16809,6 +16822,8 @@ struct MappableVarListInfo {
   SmallVector<ValueDecl *, 16> VarBaseDeclarations;
   // The reference to the user-defined mapper associated with every expression.
   SmallVector<Expr *, 16> UDMapperList;
+  // The list of whether the expression is non-contiguous or not
+  SmallVector<bool, 16> IsNonContiguousList;
 
   MappableVarListInfo(ArrayRef<Expr *> VarList) : VarList(VarList) {
     // We have a list of components and base declarations for each entry in the
@@ -16905,14 +16920,24 @@ static void checkMappableExpressionList(
     }
 
     OMPClauseMappableExprCommon::MappableExprComponentList CurComponents;
+    bool IsNonContiguousTargetUpdate = false;
     ValueDecl *CurDeclaration = nullptr;
 
     // Obtain the array or member expression bases if required. Also, fill the
     // components array with all the components identified in the process.
     const Expr *BE = checkMapClauseExpressionBase(
-        SemaRef, SimpleExpr, CurComponents, CKind, /*NoDiagnose=*/false);
+        SemaRef, SimpleExpr, CurComponents, IsNonContiguousTargetUpdate, CKind,
+        DSAS->getCurrentDirective(),
+        /*NoDiagnose=*/false);
+    llvm::errs() << "[DEBUG] non contiguous: " << (int)IsNonContiguousTargetUpdate
+                 << "\n";
     if (!BE)
       continue;
+
+//     for (const auto &Components : CurComponents) {
+//       llvm::errs() << "Expr: \n";
+//       Components.getAssociatedExpression()->dump();
+//     }
 
     assert(!CurComponents.empty() &&
            "Invalid mappable expression information.");
@@ -16933,6 +16958,7 @@ static void checkMappableExpressionList(
       MVLI.VarComponents.back().append(CurComponents.begin(),
                                        CurComponents.end());
       MVLI.VarBaseDeclarations.push_back(nullptr);
+      MVLI.IsNonContiguousList.push_back(IsNonContiguousTargetUpdate);
       continue;
     }
 
@@ -17110,6 +17136,7 @@ static void checkMappableExpressionList(
                                      CurComponents.end());
     MVLI.VarBaseDeclarations.push_back(isa<MemberExpr>(BE) ? nullptr
                                                            : CurDeclaration);
+    MVLI.IsNonContiguousList.push_back(IsNonContiguousTargetUpdate);
   }
 }
 
@@ -18063,7 +18090,7 @@ OMPClause *Sema::ActOnOpenMPToClause(ArrayRef<Expr *> VarList,
 
   return OMPToClause::Create(
       Context, Locs, MVLI.ProcessedVarList, MVLI.VarBaseDeclarations,
-      MVLI.VarComponents, MVLI.UDMapperList,
+      MVLI.VarComponents, MVLI.IsNonContiguousList, MVLI.UDMapperList,
       MapperIdScopeSpec.getWithLocInContext(Context), MapperId);
 }
 

@@ -221,6 +221,14 @@ protected:
               static_cast<T *>(this)->template getTrailingObjects<Expr *>());
   }
 
+  /// Sets the list of variables for this clause.
+  void setNonContiguousList(ArrayRef<bool> NL) {
+    assert(NL.size() == NumVars &&
+           "Number of variables is not the same as the preallocated buffer");
+    std::copy(NL.begin(), NL.end(),
+              static_cast<T *>(this)->template getTrailingObjects<bool>());
+  }
+
 public:
   using varlist_iterator = MutableArrayRef<Expr *>::iterator;
   using varlist_const_iterator = ArrayRef<const Expr *>::iterator;
@@ -4697,6 +4705,9 @@ public:
   using MappableExprComponentLists = SmallVector<MappableExprComponentList, 8>;
   using MappableExprComponentListsRef = ArrayRef<MappableExprComponentList>;
 
+  /// List of NonContiguous attribute for base expression
+  SmallVector<bool, 16> NonContiguousList;
+
 protected:
   // Return the total number of elements in a list of component lists.
   static unsigned
@@ -4719,11 +4730,15 @@ struct OMPMappableExprListSizeTy {
   unsigned NumComponentLists;
   /// Total number of expression components.
   unsigned NumComponents;
+  /// Number of non-contiguous item.
+  unsigned NumNonContiguousList;
   OMPMappableExprListSizeTy() = default;
   OMPMappableExprListSizeTy(unsigned NumVars, unsigned NumUniqueDeclarations,
-                            unsigned NumComponentLists, unsigned NumComponents)
+                            unsigned NumComponentLists, unsigned NumComponents,
+                            unsigned NumNonContiguousList)
       : NumVars(NumVars), NumUniqueDeclarations(NumUniqueDeclarations),
-        NumComponentLists(NumComponentLists), NumComponents(NumComponents) {}
+        NumComponentLists(NumComponentLists), NumComponents(NumComponents),
+        NumNonContiguousList(NumNonContiguousList) {}
 };
 
 /// This represents clauses with a list of expressions that are mappable.
@@ -4996,6 +5011,13 @@ protected:
     assert(DMDs.size() == OMPVarListClause<T>::varlist_size() &&
            "Unexpected number of user-defined mappers.");
     std::copy(DMDs.begin(), DMDs.end(), getUDMapperRefs().begin());
+  }
+
+  /// Sets the list of non-contiguous attributes for this clause.
+  void setNonContiguousList(ArrayRef<bool> NL) {
+    assert(NL.size() == getUniqueDeclarationsNum() &&
+           "Unexpected number of non-contiguous");
+    std::copy(NL.begin(), NL.end(), std::back_inserter(NonContiguousList));
   }
 
 public:
@@ -6207,7 +6229,8 @@ public:
 class OMPToClause final : public OMPMappableExprListClause<OMPToClause>,
                           private llvm::TrailingObjects<
                               OMPToClause, Expr *, ValueDecl *, unsigned,
-                              OMPClauseMappableExprCommon::MappableComponent> {
+                              OMPClauseMappableExprCommon::MappableComponent,
+                              bool> {
   friend class OMPClauseReader;
   friend OMPMappableExprListClause;
   friend OMPVarListClause;
@@ -6257,6 +6280,9 @@ class OMPToClause final : public OMPMappableExprListClause<OMPToClause>,
   size_t numTrailingObjects(OverloadToken<unsigned>) const {
     return getUniqueDeclarationsNum() + getTotalComponentListNum();
   }
+  size_t numTrailingObjects(OverloadToken<bool>) const {
+    return getUniqueDeclarationsNum();
+  }
 
 public:
   /// Creates clause with a list of variables \a Vars.
@@ -6277,6 +6303,7 @@ public:
                              ArrayRef<Expr *> Vars,
                              ArrayRef<ValueDecl *> Declarations,
                              MappableExprComponentListsRef ComponentLists,
+                             ArrayRef<bool> IsNonContiguousList,
                              ArrayRef<Expr *> UDMapperRefs,
                              NestedNameSpecifierLoc UDMQualifierLoc,
                              DeclarationNameInfo MapperId);

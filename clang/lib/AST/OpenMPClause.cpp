@@ -1040,13 +1040,15 @@ OMPMapClause::CreateEmpty(const ASTContext &C,
 OMPToClause *OMPToClause::Create(
     const ASTContext &C, const OMPVarListLocTy &Locs, ArrayRef<Expr *> Vars,
     ArrayRef<ValueDecl *> Declarations,
-    MappableExprComponentListsRef ComponentLists, ArrayRef<Expr *> UDMapperRefs,
+    MappableExprComponentListsRef ComponentLists,
+    ArrayRef<bool> NonContiguousList, ArrayRef<Expr *> UDMapperRefs,
     NestedNameSpecifierLoc UDMQualifierLoc, DeclarationNameInfo MapperId) {
   OMPMappableExprListSizeTy Sizes;
   Sizes.NumVars = Vars.size();
   Sizes.NumUniqueDeclarations = getUniqueDeclarationsTotalNumber(Declarations);
   Sizes.NumComponentLists = ComponentLists.size();
   Sizes.NumComponents = getComponentsTotalNumber(ComponentLists);
+  Sizes.NumNonContiguousList = NonContiguousList.size();
 
   // We need to allocate:
   // 2 x NumVars x Expr* - we have an original list expression and an associated
@@ -1060,16 +1062,20 @@ OMPToClause *OMPToClause::Create(
   // the lists.
   void *Mem = C.Allocate(
       totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
-                       OMPClauseMappableExprCommon::MappableComponent>(
+                       OMPClauseMappableExprCommon::MappableComponent, bool>(
           2 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
-          Sizes.NumComponents));
+          Sizes.NumComponents, Sizes.NumUniqueDeclarations));
 
   auto *Clause = new (Mem) OMPToClause(UDMQualifierLoc, MapperId, Locs, Sizes);
 
   Clause->setVarRefs(Vars);
   Clause->setUDMapperRefs(UDMapperRefs);
   Clause->setClauseInfo(Declarations, ComponentLists);
+  Clause->setNonContiguousList(NonContiguousList);
+  for (auto b : Clause->NonContiguousList) {
+    llvm::errs() << "[AST] noncontiguous: " << (int) b << "\n";
+  }
   return Clause;
 }
 
@@ -1077,10 +1083,10 @@ OMPToClause *OMPToClause::CreateEmpty(const ASTContext &C,
                                       const OMPMappableExprListSizeTy &Sizes) {
   void *Mem = C.Allocate(
       totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
-                       OMPClauseMappableExprCommon::MappableComponent>(
+                       OMPClauseMappableExprCommon::MappableComponent, bool>(
           2 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
-          Sizes.NumComponents));
+          Sizes.NumComponents, Sizes.NumUniqueDeclarations));
   return new (Mem) OMPToClause(Sizes);
 }
 
