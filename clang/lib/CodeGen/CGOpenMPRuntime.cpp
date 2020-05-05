@@ -8388,23 +8388,8 @@ private:
         MapType, MapModifiers, Components, BasePointers, Pointers, Sizes, Types,
         PartialStruct, IsFirstComponentList, IsImplicit, OverlappedElements);
 
-    const auto *CurExecDir = CurDir.get<const OMPExecutableDirective *>();
-    bool IsTargetUpdate = isa<OMPTargetUpdateDirective>(*CurExecDir);
     const ASTContext &Context = CGF.getContext();
-
-    // We don't need to collect non-contiguous information for target data enter
-    // and target data exit
-    // TODO maybe check for non-contiguous first, we don't need to send
-    // descriptor for contiguous case
-    if (!IsTargetUpdate)
-      return;
-
-    llvm::errs() << "--- DEBUG MAPTYPE ---\n";
-    for (auto &Type : Types) {
-      llvm::errs() << Type << "\n";
-      //Type |= OMP_MAP_DESCRIPTOR;
-    }
-    llvm::errs() << "--- DEBUG MAPTYPE ---\n";
+    Types.back() |= MappableExprsHandler::OMP_MAP_DESCRIPTOR;
 
     MapValuesArrayTy CurOffsets;
     MapValuesArrayTy CurCounts;
@@ -8438,7 +8423,6 @@ private:
           }
           CurStrides.push_back(
             llvm::ConstantInt::get(CGF.SizeTy, ElementTypeSize));
-          llvm::errs() << "element size: " << ElementTypeSize << "\n";
         }
         llvm::Value *SizeV = nullptr;
         if (CAT) {
@@ -8451,8 +8435,6 @@ private:
                                             CGF.SizeTy, /*IsSigned=*/false);
         }
 
-        llvm::errs() << "dim size:\n";
-        SizeV->dump();
         DimSizes.push_back(SizeV);
       }
     }
@@ -8472,54 +8454,48 @@ private:
       const auto *OASE = dyn_cast<OMPArraySectionExpr>(AssocExpr);
 
       // OpenMP 5.0 allows non-contiguous array section for target update
-      if (IsTargetUpdate) {
-        if (OASE) {
-          // Offset
-          const Expr *OffsetExpr = OASE->getLowerBound();
-          llvm::Value *Offset = nullptr;
-          if (!OffsetExpr) {
-            Offset = CGF.EmitOMPSharedLValue(I->getAssociatedExpression())
-                            .getAddress(CGF)
-                            .getPointer();
-          } else {
-            Offset = CGF.EmitScalarExpr(OffsetExpr);
-          }
-          Offset =
-              CGF.Builder.CreateIntCast(Offset, CGF.SizeTy, /*isSigned=*/false);
-          CurOffsets.push_back(Offset);
-          llvm::errs() << "OffsetExpr:\n";
-          OffsetExpr->dump();
-          llvm::errs() << "OffsetVal:\n";
-          Offset->dump();
-
-          // Count
-          const Expr *CountExpr = OASE->getLength();
-          llvm::Value *Count = nullptr;
-          if (!CountExpr) {
-            Count = getExprTypeSize(I->getAssociatedExpression());
-          } else {
-            Count = CGF.EmitScalarExpr(CountExpr);
-          }
-          Count =
-              CGF.Builder.CreateIntCast(Count, CGF.SizeTy, /*isSigned=*/false);
-          CurCounts.push_back(Count);
-          llvm::errs() << "CountExpr:\n";
-          CountExpr->dump();
-          llvm::errs() << "CountVal:\n";
-          Count->dump();
-
-          // Stride
-          if (DimInt != 0) {
-            CurStride = CGF.Builder.CreateNUWMul(CurStrides.back(),
-                                                 DimSizes[DimInt - 1]);
-            CurStrides.push_back(CurStride);
-          }
-          llvm::errs() << "StrideVal:\n";
-          CurStrides[DimInt]->dump();
-        } else if (AE) {
-          CurOffsets.push_back(nullptr);
-          CurCounts.push_back(nullptr);
+      if (OASE) {
+        // Offset
+        const Expr *OffsetExpr = OASE->getLowerBound();
+        llvm::Value *Offset = nullptr;
+        if (!OffsetExpr) {
+          Offset = CGF.EmitOMPSharedLValue(I->getAssociatedExpression())
+                       .getAddress(CGF)
+                       .getPointer();
+        } else {
+          Offset = CGF.EmitScalarExpr(OffsetExpr);
         }
+        Offset =
+            CGF.Builder.CreateIntCast(Offset, CGF.SizeTy, /*isSigned=*/false);
+        CurOffsets.push_back(Offset);
+        llvm::errs() << "OffsetVal:\n";
+        Offset->dump();
+
+        // Count
+        const Expr *CountExpr = OASE->getLength();
+        llvm::Value *Count = nullptr;
+        if (!CountExpr) {
+          Count = getExprTypeSize(I->getAssociatedExpression());
+        } else {
+          Count = CGF.EmitScalarExpr(CountExpr);
+        }
+        Count =
+            CGF.Builder.CreateIntCast(Count, CGF.SizeTy, /*isSigned=*/false);
+        CurCounts.push_back(Count);
+        llvm::errs() << "CountVal:\n";
+        Count->dump();
+
+        // Stride
+        if (DimInt != 0) {
+          CurStride =
+              CGF.Builder.CreateNUWMul(CurStrides.back(), DimSizes[DimInt - 1]);
+          CurStrides.push_back(CurStride);
+        }
+        llvm::errs() << "StrideVal:\n";
+        CurStrides[DimInt]->dump();
+      } else if (AE) {
+        CurOffsets.push_back(nullptr);
+        CurCounts.push_back(nullptr);
       }
 
       if (OASE || AE) {
@@ -8531,7 +8507,6 @@ private:
     Offsets.push_back(CurOffsets);
     Counts.push_back(CurCounts);
     Strides.push_back(CurStrides);
-    llvm::errs() << "Dims: " << DimInt << "\n";
   }
 
   /// Return the adjusted map modifiers if the declaration a capture refers to
@@ -8731,7 +8706,6 @@ public:
         InfoGen(L.first, L.second, C->getMapType(), C->getMapTypeModifiers(),
             /*ReturnDevicePointer=*/false, C->isImplicit());
       }
-    llvm::errs() << "generateAllInfo\n";
     for (const auto *C : CurExecDir->getClausesOfKind<OMPToClause>()) {
       SmallVector<std::pair<unsigned, const ValueDecl *>, 4> BaseDecls;
       unsigned Cnt = 0;
@@ -9370,7 +9344,9 @@ emitOffloadingArrays(CodeGenFunction &CGF,
                      MappableExprsHandler::MapValuesArrayTy &Pointers,
                      MappableExprsHandler::MapValuesArrayTy &Sizes,
                      MappableExprsHandler::MapFlagsArrayTy &MapTypes,
-                     CGOpenMPRuntime::TargetDataInfo &Info) {
+                     MappableExprsHandler::MapDimArrayTy &Dims,
+                     CGOpenMPRuntime::TargetDataInfo &Info,
+                     bool IsNonContiguous = false) {
   CodeGenModule &CGM = CGF.CGM;
   ASTContext &Ctx = CGF.getContext();
 
@@ -9413,8 +9389,14 @@ emitOffloadingArrays(CodeGenFunction &CGF,
       // We expect all the sizes to be constant, so we collect them to create
       // a constant array.
       SmallVector<llvm::Constant *, 16> ConstSizes;
-      for (llvm::Value *S : Sizes)
-        ConstSizes.push_back(cast<llvm::Constant>(S));
+      for (unsigned I = 0, E = Sizes.size(); I < E; ++I) {
+        if (IsNonContiguous &&
+            (MapTypes[I] & MappableExprsHandler::OMP_MAP_DESCRIPTOR)) {
+          ConstSizes.push_back(llvm::ConstantInt::get(CGF.SizeTy, Dims[I]));
+        } else {
+          ConstSizes.push_back(cast<llvm::Constant>(Sizes[I]));
+        }
+      }
 
       auto *SizesArrayInit = llvm::ConstantArray::get(
           llvm::ArrayType::get(CGM.Int64Ty, ConstSizes.size()), ConstSizes);
@@ -9494,7 +9476,8 @@ emitTargetDataOffloadingArrays(CodeGenFunction &CGF,
                      MappableExprsHandler::MapNonContiguousArrayTy &Counts,
                      MappableExprsHandler::MapNonContiguousArrayTy &Strides,
                      CGOpenMPRuntime::TargetDataInfo &Info) {
-  emitOffloadingArrays(CGF, BasePointers, Pointers, Sizes, MapTypes, Info);
+  emitOffloadingArrays(CGF, BasePointers, Pointers, Sizes, MapTypes, Dims, Info,
+                       true);
 
   if (Offsets.empty()) return;
 
@@ -9505,129 +9488,62 @@ emitTargetDataOffloadingArrays(CodeGenFunction &CGF,
   SmallVector<uint32_t, 4> DimsVec(Dims.size(), 0);
   llvm::copy(Dims, DimsVec.begin());
   llvm::Constant *DimsArrayInit =
-    llvm::ConstantDataArray::get(CGF.Builder.getContext(), DimsVec);
-  std::string DimsName =
-    CGM.getOpenMPRuntime().getName({"offload_dims"});
+      llvm::ConstantDataArray::get(CGF.Builder.getContext(), DimsVec);
+  std::string DimsName = CGM.getOpenMPRuntime().getName({"offload_dims"});
   auto *DimsArrayGbl = new llvm::GlobalVariable(
-    CGM.getModule(), DimsArrayInit->getType(),
-    /*isConstant=*/true, llvm::GlobalValue::PrivateLinkage,
-    DimsArrayInit, DimsName);
+      CGM.getModule(), DimsArrayInit->getType(),
+      /*isConstant=*/true, llvm::GlobalValue::PrivateLinkage, DimsArrayInit,
+      DimsName);
   DimsArrayGbl->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
   Info.DimsArray = DimsArrayGbl;
 
   // Build an array of struct
   if (Info.NumberOfPtrs) {
-    llvm::APInt DescriptorNumAP(32, Info.NumberOfPtrs, /*isSigned=*/true);
-    QualType DescriptorArrayType = C.getConstantArrayType(
-        C.VoidPtrTy, DescriptorNumAP, nullptr, ArrayType::Normal,
-        /*IndexTypeQuals=*/0);
-    Info.DescriptorsArray =
-        CGF.CreateMemTemp(DescriptorArrayType, ".offload_descriptors")
-            .getPointer();
-
     // Build struct descriptor_dim {
     //  int64_t offset;
     //  int64_t count;
     //  int64_t stride
     // };
-    llvm::Type *FieldTypes[] = {
-        CGM.Int64Ty, // Offset
-        CGM.Int64Ty, // Count
-        CGM.Int64Ty  // Stride
-    };
-    llvm::StructType *DescriptorDim = llvm::StructType::create(
-        CGM.getLLVMContext(), FieldTypes, "descriptor_dim");
-    //TODO alignment
-    // descriptor_dim **D =
-    //  (descriptor_dim**) malloc(NumOfPointers * (VoidPtrTy size));
-    llvm::Type *DescriptorTy = DescriptorDim->getPointerTo()->getPointerTo();
-    llvm::AllocaInst *DescriptorInst =
-        CGF.Builder.CreateAlloca(DescriptorTy, nullptr, "D");
-    unsigned PointerAlignment = CGM.getPointerSize().getQuantity();
-    llvm::Value *DescriptorSize = CGF.Builder.CreateMul(
-        llvm::ConstantInt::get(CGF.SizeTy, PointerAlignment),
-        llvm::ConstantInt::get(CGF.SizeTy, Info.NumberOfPtrs));
-    llvm::Type *TypeParams[] = {CGM.Int64Ty};
-    auto *MallocFnTy =
-        llvm::FunctionType::get(CGM.Int8PtrTy, TypeParams, /*isVarArg*/ false);
-    // TODO alloc size attributes
-    llvm::FunctionCallee RTLFn =
-        CGM.CreateRuntimeFunction(MallocFnTy, "malloc");
-    llvm::CallInst *CInst = CGF.EmitRuntimeCall(RTLFn, DescriptorSize);
-    llvm::Value *CCast = CGF.Builder.CreateBitCast(CInst, DescriptorTy);
-    CGF.Builder.CreateAlignedStore(CCast, DescriptorInst,
-                                   llvm::MaybeAlign(PointerAlignment),
-                                   /*IsVolatile*/ false);
+    QualType Int64Ty =
+        C.getIntTypeForBitwidth(/*DestWidth=*/64, /*Signed=*/true);
+    RecordDecl *RD;
+    RD = C.buildImplicitRecord("descriptor_dim");
+    RD->startDefinition();
+    addFieldToRecordDecl(C, RD, Int64Ty);
+    addFieldToRecordDecl(C, RD, Int64Ty);
+    addFieldToRecordDecl(C, RD, Int64Ty);
+    RD->completeDefinition();
+    QualType DimTy = C.getRecordType(RD);
 
-    llvm::Value *IVal = CGF.Builder.CreateAlloca(CGM.Int32Ty, nullptr, "I");
+    enum { OffsetFD = 0, CountFD, StrideFD };
     for (unsigned I = 0, E = Info.NumberOfPtrs; I < E; ++I) {
-      // Dim being zero to indicate that this base is contiguous
-      if (Dims[I] == 0) continue;
-      // D[i] = (descriptors*) malloc(DimSize * (VoidPtrTy size));
-      llvm::MaybeAlign IntAlign =
-          llvm::MaybeAlign(CGM.getIntAlign().getQuantity());
-      llvm::MaybeAlign Int64Align = llvm::MaybeAlign(64);
-      CGF.Builder.CreateAlignedStore(llvm::ConstantInt::get(CGF.Int32Ty, I),
-                                     IVal, IntAlign,
-                                     /*IsVolatile*/ false);
-      llvm::Value *DimSize = CGF.Builder.CreateMul(
-          llvm::ConstantInt::get(CGF.SizeTy, PointerAlignment),
-          llvm::ConstantInt::get(CGF.SizeTy, Dims[I]));
-      CInst = CGF.EmitRuntimeCall(RTLFn, DimSize);
-      CCast = CGF.Builder.CreateBitCast(CInst, DescriptorDim->getPointerTo());
-      llvm::LoadInst *LI =
-          CGF.Builder.CreateAlignedLoad(DescriptorInst, IntAlign);
-      llvm::Value *Arg = CGF.Builder.CreateAlignedLoad(IVal, IntAlign);
-      llvm::Value *NumberOfPtrsIdx =
-          CGF.Builder.CreateInBoundsGEP(LI, Arg, "numbers_dx");
-      CGF.Builder.CreateAlignedStore(CCast, NumberOfPtrsIdx,
-                                     llvm::MaybeAlign(PointerAlignment),
-                                     /*IsVolatile*/ false);
-
-      enum { OffsetFD = 0, CountFD, StrideFD };
-      llvm::Value *IIVal =
-        CGF.Builder.CreateAlloca(CGM.Int32Ty, nullptr, "II");
-      // Fill Descriptor with data
+      llvm::APInt Size(/*numBits=*/32, Dims[I]);
+      QualType ArrayTy =
+          C.getConstantArrayType(DimTy, Size, nullptr, ArrayType::Normal, 0);
+      Address DimsAddr = CGF.CreateMemTemp(ArrayTy, "dims");
       for (unsigned II = 0, EE = Dims[I]; II < EE; ++II) {
-        CGF.Builder.CreateAlignedStore(llvm::ConstantInt::get(CGF.Int32Ty, II),
-                                       IIVal, IntAlign,
-                                       /*IsVolatile*/ false);
-        Arg = CGF.Builder.CreateAlignedLoad(IIVal, IntAlign);
-        llvm::Value *DimsIdx =
-            CGF.Builder.CreateInBoundsGEP(NumberOfPtrsIdx, Arg, "dims_idx");
-        llvm::LoadInst *LD =
-            CGF.Builder.CreateAlignedLoad(DimsIdx, llvm::MaybeAlign(8));
-        // Offset
-        llvm::Value *OffsetArgs[] = {
-            llvm::ConstantInt::get(CGF.Int32Ty, 0),
-            llvm::ConstantInt::get(CGF.Int32Ty, OffsetFD)};
-        llvm::Value *OffsetVal =
-            CGF.Builder.CreateInBoundsGEP(LD, OffsetArgs, "offset");
-        CGF.Builder.CreateAlignedStore(Offsets[I][II], OffsetVal, Int64Align);
+        LValue DimsLVal = CGF.MakeAddrLValue(
+            CGF.Builder.CreateConstArrayGEP(DimsAddr, II), DimTy);
+        LValue OffsetLVal = CGF.EmitLValueForField(
+            DimsLVal, *std::next(RD->field_begin(), OffsetFD));
+        CGF.EmitStoreOfScalar(Offsets[I][II], OffsetLVal);
         // Count
-        llvm::Value *CountArgs[] = {
-            llvm::ConstantInt::get(CGF.Int32Ty, 0),
-            llvm::ConstantInt::get(CGF.Int32Ty, CountFD)};
-        llvm::Value *CountVal =
-            CGF.Builder.CreateInBoundsGEP(LD, CountArgs, "count");
-        CGF.Builder.CreateAlignedStore(Counts[I][II], CountVal, Int64Align);
+        LValue CountLVal = CGF.EmitLValueForField(
+            DimsLVal, *std::next(RD->field_begin(), CountFD));
+        CGF.EmitStoreOfScalar(Offsets[I][II], CountLVal);
         // Stride
-        llvm::Value *StrideArgs[] = {
-            llvm::ConstantInt::get(CGF.Int32Ty, 0),
-            llvm::ConstantInt::get(CGF.Int32Ty, StrideFD)};
-        llvm::Value *StrideVal =
-            CGF.Builder.CreateInBoundsGEP(LD, StrideArgs, "stride");
-        CGF.Builder.CreateAlignedStore(Strides[I][II], StrideVal, Int64Align);
+        LValue StrideLVal = CGF.EmitLValueForField(
+            DimsLVal, *std::next(RD->field_begin(), StrideFD));
+        CGF.EmitStoreOfScalar(Strides[I][II], StrideLVal);
       }
-      // Cast and store the descriptor to Info.PointersArray[I]
-      llvm::Value *LD = CGF.Builder.CreateAlignedLoad(
-        DescriptorInst, llvm::MaybeAlign(PointerAlignment));
-      CCast = CGF.Builder.CreateBitCast(LD, CGF.Int8PtrTy);
+      // args[I] = &dims
+      Address DAddr = CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+          DimsAddr, CGM.Int8PtrTy);
       llvm::Value *P = CGF.Builder.CreateConstInBoundsGEP2_32(
           llvm::ArrayType::get(CGM.VoidPtrTy, Info.NumberOfPtrs),
           Info.PointersArray, 0, I);
-      CGF.Builder.CreateAlignedStore(CCast, P,
-                                     llvm::MaybeAlign(PointerAlignment));
+      Address PAddr(P, C.getTypeAlignInChars(C.VoidPtrTy));
+      CGF.Builder.CreateStore(DAddr.getPointer(), PAddr);
     }
   }
 }
@@ -10377,7 +10293,9 @@ void CGOpenMPRuntime::emitTargetCall(
 
     TargetDataInfo Info;
     // Fill up the arrays and create the arguments.
-    emitOffloadingArrays(CGF, BasePointers, Pointers, Sizes, MapTypes, Info);
+    MappableExprsHandler::MapDimArrayTy Dims;
+    emitOffloadingArrays(CGF, BasePointers, Pointers, Sizes, MapTypes, Dims,
+                         Info);
     emitOffloadingArraysArgument(CGF, Info.BasePointersArray,
                                  Info.PointersArray, Info.SizesArray,
                                  Info.MapTypesArray, Info);
