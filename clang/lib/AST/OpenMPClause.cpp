@@ -986,7 +986,8 @@ unsigned OMPClauseMappableExprCommon::getUniqueDeclarationsTotalNumber(
 OMPMapClause *OMPMapClause::Create(
     const ASTContext &C, const OMPVarListLocTy &Locs, ArrayRef<Expr *> Vars,
     ArrayRef<ValueDecl *> Declarations,
-    MappableExprComponentListsRef ComponentLists, ArrayRef<Expr *> UDMapperRefs,
+    MappableExprComponentListsRef ComponentLists,
+    ArrayRef<bool> NonContiguousList, ArrayRef<Expr *> UDMapperRefs,
     ArrayRef<OpenMPMapModifierKind> MapModifiers,
     ArrayRef<SourceLocation> MapModifiersLoc,
     NestedNameSpecifierLoc UDMQualifierLoc, DeclarationNameInfo MapperId,
@@ -1002,15 +1003,17 @@ OMPMapClause *OMPMapClause::Create(
   // user-defined mapper for each clause list entry.
   // NumUniqueDeclarations x ValueDecl* - unique base declarations associated
   // with each component list.
+  // NumComponentLists x bool - number of non-contiguous attribute.
   // (NumUniqueDeclarations + NumComponentLists) x unsigned - we specify the
   // number of lists for each unique declaration and the size of each component
   // list.
   // NumComponents x MappableComponent - the total of all the components in all
   // the lists.
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
           2 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
   OMPMapClause *Clause = new (Mem)
@@ -1019,7 +1022,7 @@ OMPMapClause *OMPMapClause::Create(
 
   Clause->setVarRefs(Vars);
   Clause->setUDMapperRefs(UDMapperRefs);
-  Clause->setClauseInfo(Declarations, ComponentLists);
+  Clause->setClauseInfo(Declarations, ComponentLists, NonContiguousList);
   Clause->setMapType(Type);
   Clause->setMapLoc(TypeLoc);
   return Clause;
@@ -1029,9 +1032,9 @@ OMPMapClause *
 OMPMapClause::CreateEmpty(const ASTContext &C,
                           const OMPMappableExprListSizeTy &Sizes) {
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
-          2 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          2 * Sizes.NumVars, Sizes.NumUniqueDeclarations, Sizes.NumVars,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
   return new (Mem) OMPMapClause(Sizes);
@@ -1040,7 +1043,8 @@ OMPMapClause::CreateEmpty(const ASTContext &C,
 OMPToClause *OMPToClause::Create(
     const ASTContext &C, const OMPVarListLocTy &Locs, ArrayRef<Expr *> Vars,
     ArrayRef<ValueDecl *> Declarations,
-    MappableExprComponentListsRef ComponentLists, ArrayRef<Expr *> UDMapperRefs,
+    MappableExprComponentListsRef ComponentLists,
+    ArrayRef<bool> NonContiguousList, ArrayRef<Expr *> UDMapperRefs,
     NestedNameSpecifierLoc UDMQualifierLoc, DeclarationNameInfo MapperId) {
   OMPMappableExprListSizeTy Sizes;
   Sizes.NumVars = Vars.size();
@@ -1053,15 +1057,17 @@ OMPToClause *OMPToClause::Create(
   // user-defined mapper for each clause list entry.
   // NumUniqueDeclarations x ValueDecl* - unique base declarations associated
   // with each component list.
+  // NumComponentLists x bool - number of non-contiguous attribute.
   // (NumUniqueDeclarations + NumComponentLists) x unsigned - we specify the
   // number of lists for each unique declaration and the size of each component
   // list.
   // NumComponents x MappableComponent - the total of all the components in all
   // the lists.
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
           2 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
 
@@ -1069,16 +1075,22 @@ OMPToClause *OMPToClause::Create(
 
   Clause->setVarRefs(Vars);
   Clause->setUDMapperRefs(UDMapperRefs);
-  Clause->setClauseInfo(Declarations, ComponentLists);
+  Clause->setClauseInfo(Declarations, ComponentLists, NonContiguousList);
+
+  llvm::errs() << "[AST To] NonContiguousList: \n";
+  for (auto I : Clause->getNonContiguousListsRef()) {
+    llvm::errs() << "I: " << (int) I << "\n";
+  }
   return Clause;
 }
 
 OMPToClause *OMPToClause::CreateEmpty(const ASTContext &C,
                                       const OMPMappableExprListSizeTy &Sizes) {
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
           2 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
   return new (Mem) OMPToClause(Sizes);
@@ -1087,7 +1099,9 @@ OMPToClause *OMPToClause::CreateEmpty(const ASTContext &C,
 OMPFromClause *OMPFromClause::Create(
     const ASTContext &C, const OMPVarListLocTy &Locs, ArrayRef<Expr *> Vars,
     ArrayRef<ValueDecl *> Declarations,
-    MappableExprComponentListsRef ComponentLists, ArrayRef<Expr *> UDMapperRefs,
+    MappableExprComponentListsRef ComponentLists,
+    ArrayRef<bool> NonContiguousList,
+    ArrayRef<Expr *> UDMapperRefs,
     NestedNameSpecifierLoc UDMQualifierLoc, DeclarationNameInfo MapperId) {
   OMPMappableExprListSizeTy Sizes;
   Sizes.NumVars = Vars.size();
@@ -1100,15 +1114,17 @@ OMPFromClause *OMPFromClause::Create(
   // user-defined mapper for each clause list entry.
   // NumUniqueDeclarations x ValueDecl* - unique base declarations associated
   // with each component list.
+  // NumComponentLists x bool - number of non-contiguous attribute.
   // (NumUniqueDeclarations + NumComponentLists) x unsigned - we specify the
   // number of lists for each unique declaration and the size of each component
   // list.
   // NumComponents x MappableComponent - the total of all the components in all
   // the lists.
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
           2 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
 
@@ -1117,7 +1133,12 @@ OMPFromClause *OMPFromClause::Create(
 
   Clause->setVarRefs(Vars);
   Clause->setUDMapperRefs(UDMapperRefs);
-  Clause->setClauseInfo(Declarations, ComponentLists);
+  Clause->setClauseInfo(Declarations, ComponentLists, NonContiguousList);
+
+  llvm::errs() << "[AST From] NonContiguousList: \n";
+  for (auto I : Clause->getNonContiguousListsRef()) {
+    llvm::errs() << "I: " << (int) I << "\n";
+  }
   return Clause;
 }
 
@@ -1125,9 +1146,10 @@ OMPFromClause *
 OMPFromClause::CreateEmpty(const ASTContext &C,
                            const OMPMappableExprListSizeTy &Sizes) {
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
           2 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
   return new (Mem) OMPFromClause(Sizes);
@@ -1161,15 +1183,17 @@ OMPUseDevicePtrClause *OMPUseDevicePtrClause::Create(
   // list entry and an equal number of private copies and inits.
   // NumUniqueDeclarations x ValueDecl* - unique base declarations associated
   // with each component list.
+  // NumComponentLists x bool - number of non-contiguous attribute.
   // (NumUniqueDeclarations + NumComponentLists) x unsigned - we specify the
   // number of lists for each unique declaration and the size of each component
   // list.
   // NumComponents x MappableComponent - the total of all the components in all
   // the lists.
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
           3 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
 
@@ -1178,7 +1202,8 @@ OMPUseDevicePtrClause *OMPUseDevicePtrClause::Create(
   Clause->setVarRefs(Vars);
   Clause->setPrivateCopies(PrivateVars);
   Clause->setInits(Inits);
-  Clause->setClauseInfo(Declarations, ComponentLists);
+  SmallVector<bool, 4> NonContiguousList(Declarations.size(), false);
+  Clause->setClauseInfo(Declarations, ComponentLists, NonContiguousList);
   return Clause;
 }
 
@@ -1186,9 +1211,10 @@ OMPUseDevicePtrClause *
 OMPUseDevicePtrClause::CreateEmpty(const ASTContext &C,
                                    const OMPMappableExprListSizeTy &Sizes) {
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
           3 * Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
   return new (Mem) OMPUseDevicePtrClause(Sizes);
@@ -1210,22 +1236,24 @@ OMPIsDevicePtrClause::Create(const ASTContext &C, const OMPVarListLocTy &Locs,
   // entry.
   // NumUniqueDeclarations x ValueDecl* - unique base declarations associated
   // with each component list.
+  // NumComponentLists x bool - number of non-contiguous attribute.
   // (NumUniqueDeclarations + NumComponentLists) x unsigned - we specify the
   // number of lists for each unique declaration and the size of each component
   // list.
   // NumComponents x MappableComponent - the total of all the components in all
   // the lists.
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
-          Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumVars, Sizes.NumUniqueDeclarations, Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
 
   OMPIsDevicePtrClause *Clause = new (Mem) OMPIsDevicePtrClause(Locs, Sizes);
 
   Clause->setVarRefs(Vars);
-  Clause->setClauseInfo(Declarations, ComponentLists);
+  SmallVector<bool, 4> NonContiguousList(Declarations.size(), false);
+  Clause->setClauseInfo(Declarations, ComponentLists, NonContiguousList);
   return Clause;
 }
 
@@ -1233,9 +1261,9 @@ OMPIsDevicePtrClause *
 OMPIsDevicePtrClause::CreateEmpty(const ASTContext &C,
                                   const OMPMappableExprListSizeTy &Sizes) {
   void *Mem = C.Allocate(
-      totalSizeToAlloc<Expr *, ValueDecl *, unsigned,
+      totalSizeToAlloc<Expr *, ValueDecl *, bool, unsigned,
                        OMPClauseMappableExprCommon::MappableComponent>(
-          Sizes.NumVars, Sizes.NumUniqueDeclarations,
+          Sizes.NumVars, Sizes.NumUniqueDeclarations, Sizes.NumComponentLists,
           Sizes.NumUniqueDeclarations + Sizes.NumComponentLists,
           Sizes.NumComponents));
   return new (Mem) OMPIsDevicePtrClause(Sizes);

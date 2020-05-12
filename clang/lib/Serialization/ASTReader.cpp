@@ -12530,6 +12530,13 @@ void OMPClauseReader::VisitOMPToClause(OMPToClause *C) {
         AssociatedExpr, AssociatedDecl));
   }
   C->setComponents(Components, ListSizes);
+
+  SmallVector<bool, 16> ListNonContiguous;
+  ListNonContiguous.reserve(TotalLists);
+  for (unsigned i = 0; i < TotalLists; ++i) {
+    ListNonContiguous.push_back(Record.readBool());
+  }
+  C->setNonContiguousLists(ListNonContiguous);
 }
 
 void OMPClauseReader::VisitOMPFromClause(OMPFromClause *C) {
@@ -12580,6 +12587,13 @@ void OMPClauseReader::VisitOMPFromClause(OMPFromClause *C) {
         AssociatedExpr, AssociatedDecl));
   }
   C->setComponents(Components, ListSizes);
+
+  SmallVector<bool, 16> ListNonContiguous;
+  ListNonContiguous.reserve(TotalLists);
+  for (unsigned i = 0; i < TotalLists; ++i) {
+    ListNonContiguous.push_back(Record.readBool());
+  }
+  C->setNonContiguousLists(ListNonContiguous);
 }
 
 void OMPClauseReader::VisitOMPUseDevicePtrClause(OMPUseDevicePtrClause *C) {

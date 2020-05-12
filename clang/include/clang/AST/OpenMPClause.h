@@ -4886,10 +4886,35 @@ protected:
     std::copy(Components.begin(), Components.end(), getComponentsRef().begin());
   }
 
+  /// Get the non-contiguous attribute per declaration that are in the trailing
+  /// objects of the class.
+  MutableArrayRef<bool> getNonContiguousListsRef() {
+    return MutableArrayRef<bool>(
+        static_cast<T *>(this)->template getTrailingObjects<bool>(),
+        NumComponentLists);
+  }
+
+  /// Get the non-contiguous attribute per declaration that are in the trailing
+  /// objects of the class.
+  ArrayRef<bool> getNonContiguousListsRef() const {
+    return ArrayRef<bool>(
+        static_cast<const T *>(this)->template getTrailingObjects<bool>(),
+        NumComponentLists);
+  }
+
+  /// Set the non-contiguous attribute per declaration that are in the trailing
+  /// objects of the class.
+  void setNonContiguousLists(ArrayRef<bool> NLs) {
+    assert(NLs.size() == NumComponentLists &&
+           "Unexpected amount of list numbers.");
+    std::copy(NLs.begin(), NLs.end(), getNonContiguousListsRef().begin());
+  }
+
   /// Fill the clause information from the list of declarations and
   /// associated component lists.
   void setClauseInfo(ArrayRef<ValueDecl *> Declarations,
-                     MappableExprComponentListsRef ComponentLists) {
+                     MappableExprComponentListsRef ComponentLists,
+                     ArrayRef<bool> NonContiguousList) {
     // Perform some checks to make sure the data sizes are consistent with the
     // information available when the clause was created.
     assert(getUniqueDeclarationsTotalNumber(Declarations) ==
@@ -4901,6 +4926,8 @@ protected:
            "Declaration and component lists size is not consistent!");
     assert(Declarations.size() == NumComponentLists &&
            "Unexpected declaration and component lists size!");
+    assert(NonContiguousList.size() == ComponentLists.size() &&
+           "Unexpected NonContiguousList size");
 
     // Organize the components by declaration and retrieve the original
     // expression. Original expressions are always the first component of the
@@ -4960,6 +4987,9 @@ protected:
         CI = std::copy(C.begin(), C.end(), CI);
       }
     }
+
+    std::copy(NonContiguousList.begin(), NonContiguousList.end(),
+              getNonContiguousListsRef().begin());
   }
 
   /// Set the nested name specifier of associated user-defined mapper.
@@ -5221,6 +5251,34 @@ public:
     return const_all_components_range(A.begin(), A.end());
   }
 
+  using non_contiguous_list_iterator = MutableArrayRef<bool>::iterator;
+  using non_contiguous_list_const_iterator = ArrayRef<bool>::iterator;
+  using non_contiguous_list_range =
+      llvm::iterator_range<non_contiguous_list_iterator>;
+  using non_contiguous_list_const_range =
+      llvm::iterator_range<non_contiguous_list_const_iterator>;
+
+  non_contiguous_list_iterator non_contiguous_list_begin() {
+    return getNonContiguousListsRef().begin();
+  }
+  non_contiguous_list_iterator non_contiguous_list_end() {
+    return getNonContiguousListsRef().end();
+  }
+  non_contiguous_list_const_iterator non_contiguous_list_begin() const {
+    return getNonContiguousListsRef().begin();
+  }
+  non_contiguous_list_const_iterator non_contiguous_list_end() const {
+    return getNonContiguousListsRef().end();
+  }
+  non_contiguous_list_range non_contiguous_lists() {
+    return non_contiguous_list_range(non_contiguous_list_begin(),
+                                     non_contiguous_list_end());
+  }
+  non_contiguous_list_const_range non_contiguous_lists() const {
+    return non_contiguous_list_const_range(non_contiguous_list_begin(),
+                                           non_contiguous_list_end());
+  }
+
   using mapperlist_iterator = MutableArrayRef<Expr *>::iterator;
   using mapperlist_const_iterator = ArrayRef<const Expr *>::iterator;
   using mapperlist_range = llvm::iterator_range<mapperlist_iterator>;
@@ -5251,10 +5309,11 @@ public:
 /// \endcode
 /// In this example directive '#pragma omp target' has clause 'map'
 /// with the variables 'a' and 'b'.
-class OMPMapClause final : public OMPMappableExprListClause<OMPMapClause>,
-                           private llvm::TrailingObjects<
-                               OMPMapClause, Expr *, ValueDecl *, unsigned,
-                               OMPClauseMappableExprCommon::MappableComponent> {
+class OMPMapClause final
+    : public OMPMappableExprListClause<OMPMapClause>,
+      private llvm::TrailingObjects<
+          OMPMapClause, Expr *, ValueDecl *, bool, unsigned,
+          OMPClauseMappableExprCommon::MappableComponent> {
   friend class OMPClauseReader;
   friend OMPMappableExprListClause;
   friend OMPVarListClause;
@@ -5269,6 +5328,9 @@ class OMPMapClause final : public OMPMappableExprListClause<OMPMapClause>,
   }
   size_t numTrailingObjects(OverloadToken<ValueDecl *>) const {
     return getUniqueDeclarationsNum();
+  }
+  size_t numTrailingObjects(OverloadToken<bool>) const {
+    return getTotalComponentListNum();
   }
   size_t numTrailingObjects(OverloadToken<unsigned>) const {
     return getUniqueDeclarationsNum() + getTotalComponentListNum();
@@ -5403,7 +5465,7 @@ public:
   Create(const ASTContext &C, const OMPVarListLocTy &Locs,
          ArrayRef<Expr *> Vars, ArrayRef<ValueDecl *> Declarations,
          MappableExprComponentListsRef ComponentLists,
-         ArrayRef<Expr *> UDMapperRefs,
+         ArrayRef<bool> NonContiguousList, ArrayRef<Expr *> UDMapperRefs,
          ArrayRef<OpenMPMapModifierKind> MapModifiers,
          ArrayRef<SourceLocation> MapModifiersLoc,
          NestedNameSpecifierLoc UDMQualifierLoc, DeclarationNameInfo MapperId,
@@ -6206,7 +6268,7 @@ public:
 /// with the variables 'a' and 'b'.
 class OMPToClause final : public OMPMappableExprListClause<OMPToClause>,
                           private llvm::TrailingObjects<
-                              OMPToClause, Expr *, ValueDecl *, unsigned,
+                              OMPToClause, Expr *, ValueDecl *, bool, unsigned,
                               OMPClauseMappableExprCommon::MappableComponent> {
   friend class OMPClauseReader;
   friend OMPMappableExprListClause;
@@ -6254,6 +6316,9 @@ class OMPToClause final : public OMPMappableExprListClause<OMPToClause>,
   size_t numTrailingObjects(OverloadToken<ValueDecl *>) const {
     return getUniqueDeclarationsNum();
   }
+  size_t numTrailingObjects(OverloadToken<bool>) const {
+    return getTotalComponentListNum();
+  }
   size_t numTrailingObjects(OverloadToken<unsigned>) const {
     return getUniqueDeclarationsNum() + getTotalComponentListNum();
   }
@@ -6277,6 +6342,7 @@ public:
                              ArrayRef<Expr *> Vars,
                              ArrayRef<ValueDecl *> Declarations,
                              MappableExprComponentListsRef ComponentLists,
+                             ArrayRef<bool> IsNonContiguousList,
                              ArrayRef<Expr *> UDMapperRefs,
                              NestedNameSpecifierLoc UDMQualifierLoc,
                              DeclarationNameInfo MapperId);
@@ -6325,7 +6391,7 @@ public:
 class OMPFromClause final
     : public OMPMappableExprListClause<OMPFromClause>,
       private llvm::TrailingObjects<
-          OMPFromClause, Expr *, ValueDecl *, unsigned,
+          OMPFromClause, Expr *, ValueDecl *, bool, unsigned,
           OMPClauseMappableExprCommon::MappableComponent> {
   friend class OMPClauseReader;
   friend OMPMappableExprListClause;
@@ -6373,6 +6439,9 @@ class OMPFromClause final
   size_t numTrailingObjects(OverloadToken<ValueDecl *>) const {
     return getUniqueDeclarationsNum();
   }
+  size_t numTrailingObjects(OverloadToken<bool>) const {
+    return getTotalComponentListNum();
+  }
   size_t numTrailingObjects(OverloadToken<unsigned>) const {
     return getUniqueDeclarationsNum() + getTotalComponentListNum();
   }
@@ -6396,6 +6465,7 @@ public:
                                ArrayRef<Expr *> Vars,
                                ArrayRef<ValueDecl *> Declarations,
                                MappableExprComponentListsRef ComponentLists,
+                               ArrayRef<bool> NonContiguousList,
                                ArrayRef<Expr *> UDMapperRefs,
                                NestedNameSpecifierLoc UDMQualifierLoc,
                                DeclarationNameInfo MapperId);
@@ -6444,7 +6514,7 @@ public:
 class OMPUseDevicePtrClause final
     : public OMPMappableExprListClause<OMPUseDevicePtrClause>,
       private llvm::TrailingObjects<
-          OMPUseDevicePtrClause, Expr *, ValueDecl *, unsigned,
+          OMPUseDevicePtrClause, Expr *, ValueDecl *, bool, unsigned,
           OMPClauseMappableExprCommon::MappableComponent> {
   friend class OMPClauseReader;
   friend OMPMappableExprListClause;
@@ -6484,6 +6554,9 @@ class OMPUseDevicePtrClause final
   }
   size_t numTrailingObjects(OverloadToken<ValueDecl *>) const {
     return getUniqueDeclarationsNum();
+  }
+  size_t numTrailingObjects(OverloadToken<bool>) const {
+    return getTotalComponentListNum();
   }
   size_t numTrailingObjects(OverloadToken<unsigned>) const {
     return getUniqueDeclarationsNum() + getTotalComponentListNum();
@@ -6608,7 +6681,7 @@ public:
 class OMPIsDevicePtrClause final
     : public OMPMappableExprListClause<OMPIsDevicePtrClause>,
       private llvm::TrailingObjects<
-          OMPIsDevicePtrClause, Expr *, ValueDecl *, unsigned,
+          OMPIsDevicePtrClause, Expr *, ValueDecl *, bool, unsigned,
           OMPClauseMappableExprCommon::MappableComponent> {
   friend class OMPClauseReader;
   friend OMPMappableExprListClause;
@@ -6647,6 +6720,9 @@ class OMPIsDevicePtrClause final
   }
   size_t numTrailingObjects(OverloadToken<ValueDecl *>) const {
     return getUniqueDeclarationsNum();
+  }
+  size_t numTrailingObjects(OverloadToken<bool>) const {
+    return getTotalComponentListNum();
   }
   size_t numTrailingObjects(OverloadToken<unsigned>) const {
     return getUniqueDeclarationsNum() + getTotalComponentListNum();

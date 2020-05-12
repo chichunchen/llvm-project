@@ -6534,6 +6534,9 @@ void OMPClauseWriter::VisitOMPToClause(OMPToClause *C) {
     Record.AddStmt(M.getAssociatedExpression());
     Record.AddDeclRef(M.getAssociatedDeclaration());
   }
+  for (auto NC : C->non_contiguous_lists()) {
+    Record.push_back(NC);
+  }
 }
 
 void OMPClauseWriter::VisitOMPFromClause(OMPFromClause *C) {
@@ -6557,6 +6560,9 @@ void OMPClauseWriter::VisitOMPFromClause(OMPFromClause *C) {
   for (auto &M : C->all_components()) {
     Record.AddStmt(M.getAssociatedExpression());
     Record.AddDeclRef(M.getAssociatedDeclaration());
+  }
+  for (auto NC : C->non_contiguous_lists()) {
+    Record.push_back(NC);
   }
 }
 
