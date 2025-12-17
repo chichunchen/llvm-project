@@ -512,6 +512,23 @@ bool ClauseProcessor::processNumTeams(
 bool ClauseProcessor::processNumThreads(
     lower::StatementContext &stmtCtx,
     mlir::omp::NumThreadsClauseOps &result) const {
+  if (auto *clause = findUniqueClause<omp::clause::NumThreadsIvan>()) {
+    // Handle num_threads_ivan: add 2 to the thread count
+    mlir::Value threadValue =
+        fir::getBase(converter.genExprValue(clause->v, stmtCtx));
+    fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
+    mlir::Location loc = firOpBuilder.getUnknownLoc();
+
+    // Cast to i64 if needed and create the addition
+    mlir::Type i64Type = firOpBuilder.getI64Type();
+    if (threadValue.getType() != i64Type) {
+      threadValue = firOpBuilder.createConvert(loc, i64Type, threadValue);
+    }
+    mlir::Value two = firOpBuilder.createIntegerConstant(loc, i64Type, 2);
+    result.numThreads = firOpBuilder.create<mlir::arith::AddIOp>(
+        loc, threadValue, two);
+    return true;
+  }
   if (auto *clause = findUniqueClause<omp::clause::NumThreads>()) {
     // OMPIRBuilder expects `NUM_THREADS` clause as a `Value`.
     result.numThreads =

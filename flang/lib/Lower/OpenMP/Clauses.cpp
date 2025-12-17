@@ -1291,6 +1291,12 @@ NumThreads make(const parser::OmpClause::NumThreads &inp,
   return NumThreads{/*Nthreads=*/makeExpr(t1.front(), semaCtx)};
 }
 
+NumThreadsIvan make(const parser::OmpClause::NumThreadsIvan &inp,
+                     semantics::SemanticsContext &semaCtx) {
+  // inp.v -> parser::OmpNumThreadsIvanClause
+  return NumThreadsIvan{/*Nthreads=*/makeExpr(inp.v, semaCtx)};
+}
+
 // OmpxAttribute: empty
 // OmpxBare: empty
 

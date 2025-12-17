@@ -392,6 +392,9 @@ def OMPC_NumThreads : Clause<[Spelling<"num_threads">]> {
     OMP_NUMTHREADS_Unknown
   ];
 }
+def OMPC_NumThreadsIvan : Clause<[Spelling<"num_threads_ivan">]> {
+  let flangClass = "ScalarIntExpr";
+}
 def OMPC_OMPX_Attribute : Clause<[Spelling<"ompx_attribute">]> {
   let clangClass = "OMPXAttributeClause";
 }
@@ -1031,6 +1034,7 @@ def OMP_Parallel : Directive<[Spelling<"parallel">]> {
                             VersionedClause<OMPC_If>,
                             VersionedClause<OMPC_Message, 60>,
                             VersionedClause<OMPC_NumThreads>,
+                            VersionedClause<OMPC_NumThreadsIvan>,
                             VersionedClause<OMPC_ProcBind>,
                             VersionedClause<OMPC_Severity, 60>,
   ];

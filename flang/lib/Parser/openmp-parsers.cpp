@@ -1538,6 +1538,8 @@ TYPE_PARSER( //
                        parenthesized(Parser<OmpNumTeamsClause>{}))) ||
     "NUM_THREADS" >> construct<OmpClause>(construct<OmpClause::NumThreads>(
                          parenthesized(Parser<OmpNumThreadsClause>{}))) ||
+    "NUM_THREADS_IVAN" >> construct<OmpClause>(construct<OmpClause::NumThreadsIvan>(
+                            parenthesized(scalarIntExpr))) ||
     "OMPX_BARE" >> construct<OmpClause>(construct<OmpClause::OmpxBare>()) ||
     "ORDER" >> construct<OmpClause>(construct<OmpClause::Order>(
                    parenthesized(Parser<OmpOrderClause>{}))) ||

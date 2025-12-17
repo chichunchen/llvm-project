@@ -270,6 +270,7 @@ using Nowait = tomp::clause::NowaitT<TypeTy, IdTy, ExprTy>;
 using NumTasks = tomp::clause::NumTasksT<TypeTy, IdTy, ExprTy>;
 using NumTeams = tomp::clause::NumTeamsT<TypeTy, IdTy, ExprTy>;
 using NumThreads = tomp::clause::NumThreadsT<TypeTy, IdTy, ExprTy>;
+using NumThreadsIvan = tomp::clause::NumThreadsIvanT<TypeTy, IdTy, ExprTy>;
 using OmpxAttribute = tomp::clause::OmpxAttributeT<TypeTy, IdTy, ExprTy>;
 using OmpxBare = tomp::clause::OmpxBareT<TypeTy, IdTy, ExprTy>;
 using OmpxDynCgroupMem = tomp::clause::OmpxDynCgroupMemT<TypeTy, IdTy, ExprTy>;

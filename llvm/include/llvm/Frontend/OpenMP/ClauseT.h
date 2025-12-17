@@ -966,6 +966,14 @@ struct NumThreadsT {
   Nthreads v;
 };
 
+// Custom `num_threads_ivan` clause for learning purposes
+template <typename T, typename I, typename E> //
+struct NumThreadsIvanT {
+  using Nthreads = E;
+  using WrapperTrait = std::true_type;
+  Nthreads v;
+};
+
 template <typename T, typename I, typename E> //
 struct OmpxAttributeT {
   using EmptyTrait = std::true_type;
@@ -1374,7 +1382,7 @@ using WrapperClausesT = std::variant<
     InclusiveT<T, I, E>, IndirectT<T, I, E>, InitializerT<T, I, E>,
     IsDevicePtrT<T, I, E>, LinkT<T, I, E>, MessageT<T, I, E>,
     NocontextT<T, I, E>, NontemporalT<T, I, E>, NovariantsT<T, I, E>,
-    NumTeamsT<T, I, E>, NumThreadsT<T, I, E>, OrderedT<T, I, E>,
+    NumTeamsT<T, I, E>, NumThreadsT<T, I, E>, NumThreadsIvanT<T, I, E>, OrderedT<T, I, E>,
     PartialT<T, I, E>, PriorityT<T, I, E>, PrivateT<T, I, E>,
     ProcBindT<T, I, E>, ReverseOffloadT<T, I, E>, SafelenT<T, I, E>,
     SelfMapsT<T, I, E>, SeverityT<T, I, E>, SharedT<T, I, E>, SimdlenT<T, I, E>,

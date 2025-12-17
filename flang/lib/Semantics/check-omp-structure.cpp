@@ -3280,8 +3280,8 @@ void OmpStructureChecker::Leave(const parser::OmpClauseList &) {
   // [5.1] 2.21.2 Threadprivate Directive Restriction
   OmpClauseSet threadprivateAllowedSet{llvm::omp::Clause::OMPC_copyin,
       llvm::omp::Clause::OMPC_copyprivate, llvm::omp::Clause::OMPC_schedule,
-      llvm::omp::Clause::OMPC_num_threads, llvm::omp::Clause::OMPC_thread_limit,
-      llvm::omp::Clause::OMPC_if};
+      llvm::omp::Clause::OMPC_num_threads, llvm::omp::Clause::OMPC_num_threads_ivan,
+      llvm::omp::Clause::OMPC_thread_limit, llvm::omp::Clause::OMPC_if};
   for (auto it : GetContext().clauseInfo) {
     llvmOmpClause type = it.first;
     const auto *clause = it.second;
@@ -5439,6 +5439,25 @@ void OmpStructureChecker::Enter(const parser::OmpClause::NumThreads &x) {
   for (auto &val : values) {
     RequiresPositiveParameter(clauseId, val);
   }
+}
+
+void OmpStructureChecker::Enter(const parser::OmpClause::NumThreadsIvan &x) {
+  constexpr auto clauseId{llvm::omp::Clause::OMPC_num_threads_ivan};
+  CheckAllowedClause(clauseId);
+  // parser::CharBlock source{GetContext().clauseSource};
+  // auto &values{std::get<std::list<parser::ScalarIntExpr>>(x.v.t)};
+
+  // if (OmpVerifyModifiers(x.v, clauseId, source, context_)) {
+  //   auto &modifiers{OmpGetModifiers(x.v)};
+  //   if (auto *dims{OmpGetUniqueModifier<parser::OmpDimsModifier>(modifiers)}) {
+  //     CheckDimsModifier(
+  //         OmpGetModifierSource(modifiers, dims), values.size(), *dims);
+  //   }
+  // }
+
+  // for (auto &val : values) {
+    RequiresPositiveParameter(clauseId, x.v);
+  // }
 }
 
 void OmpStructureChecker::Enter(const parser::OmpClause::ThreadLimit &x) {
