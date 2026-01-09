@@ -4458,6 +4458,49 @@ LogicalResult WorkdistributeOp::verify() {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// DeclareSimdOp
+//===----------------------------------------------------------------------===//
+
+void DeclareSimdOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                          FlatSymbolRefAttr funcRef,
+                          const DeclareSimdOperands &clauses) {
+  MLIRContext *ctx = odsBuilder.getContext();
+  DeclareSimdOp::build(odsBuilder, odsState, funcRef,
+                      clauses.alignedVars, makeArrayAttr(ctx, clauses.alignments),
+                      clauses.linearVars, clauses.linearStepVars,
+                      clauses.linearVarTypes,
+                      clauses.safelen, clauses.simdlen);
+}
+
+LogicalResult DeclareSimdOp::verify() {
+  if (getFuncRef().empty())
+    return emitOpError("requires a function reference");
+
+  if (verifyAlignedClause(*this, getAlignments(), getAlignedVars()).failed())
+    return failure();
+
+  // TODO add more verifications for other clauses.
+
+  return success();
+}
+
+LogicalResult DeclareSimdOp::verifySymbolUses(
+    SymbolTableCollection &symbolTable) {
+  auto *func = symbolTable.lookupNearestSymbolFrom(*this, getFuncRefAttr());
+  if (!func)
+    return emitOpError() << "references unknown symbol '" << getFuncRef() << "'";
+
+  // Accept func.func and llvm.func (common in MLIR).
+  if (!llvm::isa<mlir::func::FuncOp>(func) &&
+      !llvm::isa<mlir::LLVM::LLVMFuncOp>(func)) {
+    return emitOpError() << "symbol '" << getFuncRef()
+                         << "' is not a function (expected func.func or llvm.func)";
+  }
+
+  return success();
+}
+
 #define GET_ATTRDEF_CLASSES
 #include "mlir/Dialect/OpenMP/OpenMPOpsAttributes.cpp.inc"
 

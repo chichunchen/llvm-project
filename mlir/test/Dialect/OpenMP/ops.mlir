@@ -3367,3 +3367,62 @@ func.func @omp_target_map_clause_type_test(%arg0 : memref<?xi32>) -> () {
 
     return
 }
+
+// CHECK-LABEL: func @omp_declare_simd
+func.func @omp_declare_simd(%a: f64, %b: f64) -> f64 {
+  %0 = arith.addf %a, %b : f64
+  return %0 : f64
+}
+
+// CHECK: omp.declare_simd @omp_declare_simd
+omp.declare_simd @omp_declare_simd
+
+// CHECK-LABEL: func @omp_declare_simd_simdlen
+func.func @omp_declare_simd_simdlen(%a: f64, %b: f64) -> f64 {
+  %0 = arith.addf %a, %b : f64
+  return %0 : f64
+}
+
+// CHECK: omp.declare_simd @omp_declare_simd_simdlen
+// CHECK-SAME: simdlen(8)
+omp.declare_simd @omp_declare_simd_simdlen simdlen(8)
+
+// CHECK-LABEL: func @omp_declare_simd_safelen
+func.func @omp_declare_simd_safelen(%a: f64, %b: f64) -> f64 {
+  %0 = arith.addf %a, %b : f64
+  return %0 : f64
+}
+
+// CHECK: omp.declare_simd @omp_declare_simd_safelen
+// CHECK-SAME: safelen(4)
+omp.declare_simd @omp_declare_simd_safelen safelen(4)
+
+// CHECK-LABEL: func.func @omp_declare_simd_aligned
+func.func @omp_declare_simd_aligned(%a: f64, %b: f64) -> f64 {
+  %0 = arith.addf %a, %b : f64
+  return %0 : f64
+}
+
+memref.global @g_arr : memref<16xi32> {sym_visibility = "private"}
+%g = memref.get_global @g_arr : memref<16xi32>
+
+// CHECK: omp.declare_simd @omp_declare_simd_aligned
+// CHECK-SAME: aligned(%{{.*}} : memref<16xi32> -> 64 : i64)
+omp.declare_simd @omp_declare_simd_aligned
+  aligned(%g : memref<16xi32> -> 64 : i64)
+
+// CHECK: omp.declare_simd @omp_declare_simd_aligned
+// CHECK-SAME: aligned(%{{.*}} : memref<16xi32> -> 64 : i64)
+omp.declare_simd @omp_declare_simd_aligned
+  aligned(%g : memref<16xi32> -> 64 : i64)
+
+// CHECK-LABEL: func @omp_declare_simd_linear
+func.func @omp_declare_simd_linear(%a: f64, %b: f64) -> f64 {
+  %0 = arith.addf %a, %b : f64
+  return %0 : f64
+}
+
+%iv = arith.constant 0 : i32
+%step = arith.constant 1 : i32
+
+omp.declare_simd @omp_declare_simd_linear linear(%iv = %step : i32)

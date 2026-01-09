@@ -50,6 +50,7 @@
 #include "mlir/Support/StateStack.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "flang/Lower/Mangler.h"
 
 using namespace Fortran::lower::omp;
 using namespace Fortran::common::openmp;
@@ -3815,8 +3816,39 @@ static void
 genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
        semantics::SemanticsContext &semaCtx, lower::pft::Evaluation &eval,
        const parser::OpenMPDeclareSimdConstruct &declareSimdConstruct) {
-  if (!semaCtx.langOptions().OpenMPSimd)
-    TODO(converter.getCurrentLocation(), "OpenMPDeclareSimdConstruct");
+  mlir::Location loc = converter.getCurrentLocation();
+  fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
+  mlir::ModuleOp mod = firOpBuilder.getModule();
+
+  lower::pft::FunctionLikeUnit *owningProc = eval.getOwningProcedure();
+  if (!owningProc)
+    fir::emitFatalError(loc, "omp.declare_simd has no owning procedure");
+
+  // Grab the semantic symbol for the procedure.
+  const semantics::Symbol &procSym = owningProc->getSubprogramSymbol();
+
+  // Get the MLIR symbol name that will exist in the module.
+  // Raw source name "add" is NOT what FIR uses. FIR uses a mangled name
+  // (e.g. @_QPadd). So we must reference the mangled name here.
+  std::string mangledName = Fortran::lower::mangle::mangleName(procSym);
+
+  mlir::FlatSymbolRefAttr funcRef =
+      mlir::FlatSymbolRefAttr::get(firOpBuilder.getContext(), mangledName);
+
+  // Collect and lower the clauses from the parser node into DeclareSimdOperands.
+  const parser::OmpDirectiveSpecification &beginSpec = declareSimdConstruct.v;
+
+  List<Clause> clauses = makeClauses(beginSpec.Clauses(), semaCtx);
+
+  mlir::omp::DeclareSimdOperands clauseOps;
+  ClauseProcessor cp(converter, semaCtx, clauses);
+  cp.processAligned(clauseOps);
+  cp.processLinear(clauseOps);
+  cp.processSafelen(clauseOps);
+  cp.processSimdlen(clauseOps);
+
+  mlir::OpBuilder modBuilder(mod.getBodyRegion());
+  mlir::omp::DeclareSimdOp::create(modBuilder, loc, funcRef, clauseOps);
 }
 
 static void genOpenMPDeclareMapperImpl(

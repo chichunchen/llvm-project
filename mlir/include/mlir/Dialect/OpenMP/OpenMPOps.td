@@ -2240,4 +2240,51 @@ def WorkdistributeOp : OpenMP_Op<"workdistribute"> {
   let assemblyFormat = "$region attr-dict";
 }
 
+//===----------------------------------------------------------------------===//
+// declare simd Construct
+//===----------------------------------------------------------------------===//
+
+def DeclareSimdOp : OpenMP_Op<"declare_simd", traits = [
+    AttrSizedOperandSegments,
+    HasParent<"::mlir::ModuleOp">,
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+    IsolatedFromAbove
+  ], clauses = [
+    OpenMP_AlignedClause,
+    OpenMP_LinearClause,
+    OpenMP_SafelenClause,
+    OpenMP_SimdlenClause
+  ]> {
+  let summary = "declare simd directive";
+  let description = [{
+    "omp.declare_simd" models the OpenMP `declare simd` directive.
+
+    This is a declarative operation (no region) that references a function
+    symbol via `func_ref` and attaches SIMD-related clauses.
+
+    Example:
+    ```mlir
+    omp.declare_simd @add simdlen(8)
+    ```
+  }] # clausesDescription;
+
+  let arguments = !con(
+    (ins FlatSymbolRefAttr:$func_ref),
+    clausesArgs
+  );
+
+  let builders = [
+    OpBuilder<(ins "::mlir::FlatSymbolRefAttr":$func_ref,
+                   CArg<"const DeclareSimdOperands &">:$clauses)>
+  ];
+
+  let assemblyFormat =
+    "$func_ref " #
+    clausesReqAssemblyFormat #
+    " oilist(" # clausesOptAssemblyFormat # ") " #
+    "attr-dict";
+
+  let hasVerifier = 1;
+}
+
 #endif // OPENMP_OPS
