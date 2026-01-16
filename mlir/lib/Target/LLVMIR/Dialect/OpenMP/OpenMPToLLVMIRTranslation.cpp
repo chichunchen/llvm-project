@@ -6860,6 +6860,19 @@ convertTargetFreeMemOp(Operation &opInst, llvm::IRBuilderBase &builder,
   return success();
 }
 
+static LogicalResult
+convertDeclareSimdOp(Operation &opInst, llvm::IRBuilderBase &builder,
+                      LLVM::ModuleTranslation &moduleTranslation) {
+  auto declareSimdOp = cast<omp::DeclareSimdOp>(opInst);
+
+  auto funcOp = opInst.getParentOfType<mlir::LLVM::LLVMFuncOp>();
+  if (!funcOp)
+    return opInst.emitError("declare_simd must be defined inside an LLVM function");
+  llvm::errs() << "convertOmpDeclareSimd on function: " << funcOp << "\n";
+
+  return success();
+} 
+
 /// Given an OpenMP MLIR operation, create the corresponding LLVM IR (including
 /// OpenMP runtime calls).
 static LogicalResult
@@ -6981,6 +6994,9 @@ convertHostOrTargetOperation(Operation *op, llvm::IRBuilderBase &builder,
           })
           .Case([&](omp::TaskwaitOp op) {
             return convertOmpTaskwaitOp(op, builder, moduleTranslation);
+          })
+          .Case([&](omp::DeclareSimdOp op) {
+            return convertDeclareSimdOp(*op, builder, moduleTranslation);
           })
           .Case<omp::YieldOp, omp::TerminatorOp, omp::DeclareMapperOp,
                 omp::DeclareMapperInfoOp, omp::DeclareReductionOp,

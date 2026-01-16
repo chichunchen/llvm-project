@@ -11061,6 +11061,205 @@ void OpenMPIRBuilder::createOffloadEntriesAndInfoMetadata(
         Config.getRequiresFlags());
 }
 
+enum class DeclareSimdBranchState { Undefined, Inbranch, Notinbranch };
+
+namespace {
+  /// Kind of parameter in a function with 'declare simd' directive.
+enum ParamKindTy {
+  Linear,
+  LinearRef,
+  LinearUVal,
+  LinearVal,
+  Uniform,
+  Vector,
+};
+/// Attribute set of the parameter.
+struct ParamAttrTy {
+  ParamKindTy Kind = Vector;
+  llvm::APSInt StrideOrArg;
+  llvm::APSInt Alignment;
+  bool HasVarStride = false;
+};
+} // namespace
+
+/// Mangle the parameter part of the vector function name according to
+/// their OpenMP classification. The mangling function is defined in
+/// section 4.5 of the AAVFABI(2021Q1).
+static std::string mangleVectorParameters(ArrayRef<ParamAttrTy> ParamAttrs) {
+  SmallString<256> Buffer;
+  llvm::raw_svector_ostream Out(Buffer);
+  for (const auto &ParamAttr : ParamAttrs) {
+    switch (ParamAttr.Kind) {
+    case Linear:
+      Out << 'l';
+      break;
+    case LinearRef:
+      Out << 'R';
+      break;
+    case LinearUVal:
+      Out << 'U';
+      break;
+    case LinearVal:
+      Out << 'L';
+      break;
+    case Uniform:
+      Out << 'u';
+      break;
+    case Vector:
+      Out << 'v';
+      break;
+    }
+    if (ParamAttr.HasVarStride)
+      Out << "s" << ParamAttr.StrideOrArg;
+    else if (ParamAttr.Kind == Linear || ParamAttr.Kind == LinearRef ||
+             ParamAttr.Kind == LinearUVal || ParamAttr.Kind == LinearVal) {
+      // Don't print the step value if it is not present or if it is
+      // equal to 1.
+      if (ParamAttr.StrideOrArg < 0)
+        Out << 'n' << -ParamAttr.StrideOrArg;
+      else if (ParamAttr.StrideOrArg != 1)
+        Out << ParamAttr.StrideOrArg;
+    }
+
+    if (!!ParamAttr.Alignment)
+      Out << 'a' << ParamAttr.Alignment;
+  }
+
+  return std::string(Out.str());
+}
+
+static void
+emitX86DeclareSimdFunction(unsigned NumElements, llvm::Function *Fn,
+                           const llvm::APSInt &VLENVal,
+                           ArrayRef<ParamAttrTy> ParamAttrs,
+                           DeclareSimdBranchState State) {
+  struct ISADataTy {
+    char ISA;
+    unsigned VecRegSize;
+  };
+  ISADataTy ISAData[] = {
+      {
+          'b', 128
+      }, // SSE
+      {
+          'c', 256
+      }, // AVX
+      {
+          'd', 256
+      }, // AVX2
+      {
+          'e', 512
+      }, // AVX512
+  };
+  llvm::SmallVector<char, 2> Masked;
+  switch (State) {
+  case DeclareSimdBranchState::Undefined:
+    Masked.push_back('N');
+    Masked.push_back('M');
+    break;
+  case DeclareSimdBranchState::Notinbranch:
+    Masked.push_back('N');
+    break;
+  case DeclareSimdBranchState::Inbranch:
+    Masked.push_back('M');
+    break;
+  }
+  for (char Mask : Masked) {
+    for (const ISADataTy &Data : ISAData) {
+      SmallString<256> Buffer;
+      llvm::raw_svector_ostream Out(Buffer);
+      Out << "_ZGV" << Data.ISA << Mask;
+      if (!VLENVal) {
+        // TODO
+        // unsigned NumElts = evaluateCDTSize(FD, ParamAttrs);
+        unsigned NumElts = NumElements;
+        assert(NumElts && "Non-zero simdlen/cdtsize expected");
+        Out << llvm::APSInt::getUnsigned(Data.VecRegSize / NumElts);
+      } else {
+        Out << VLENVal;
+      }
+      Out << mangleVectorParameters(ParamAttrs);
+      Out << '_' << Fn->getName();
+      Fn->addFnAttr(Out.str());
+    }
+  }
+}
+
+static llvm::Type *getCanonicalCDTOrNull(llvm::Type *Ty,
+                                         const llvm::DataLayout &DL) {
+  if (!Ty || Ty->isVoidTy())
+    return nullptr;
+
+  // Approximate Clang's "aggregate passed-by-value becomes int, except complex".
+  if (auto *ST = llvm::dyn_cast<llvm::StructType>(Ty)) {
+    // Treat {T, T} where T is floating point as complex<T> => CDT = T.
+    if (ST->getNumElements() == 2) {
+      llvm::Type *E0 = ST->getElementType(0);
+      llvm::Type *E1 = ST->getElementType(1);
+      if (E0 == E1 && E0->isFloatingPointTy())
+        return E0;
+    }
+    return nullptr; // aggregate => fallback to int
+  }
+
+  if (llvm::isa<llvm::ArrayType>(Ty))
+    return nullptr; // aggregate => fallback to int
+
+  if (Ty->isIntegerTy() || Ty->isFloatingPointTy() || Ty->isPointerTy() ||
+      Ty->isVectorTy())
+    return Ty;
+
+  (void)DL;
+  return nullptr;
+}
+
+/// Port of Clang's evaluateCDTSize, adapted to LLVM IR.
+///
+/// Returns CDT size in bits.
+/// - If return type is non-void: CDT = return type.
+/// - Else: CDT = first parameter with Kind==Vector.
+/// - If CDT is aggregate: CDT = int32 (except complex-like {T,T}).
+/// - If none found: CDT = int32.
+static unsigned evaluateCDTSizeInBits(llvm::Function &Fn,
+                                      llvm::ArrayRef<ParamKindTy> ParamKinds,
+                                      const llvm::DataLayout &DL) {
+  llvm::Type *CDT = nullptr;
+
+  // (a) Non-void return => CDT = return type.
+  if (!Fn.getReturnType()->isVoidTy())
+    CDT = getCanonicalCDTOrNull(Fn.getReturnType(), DL);
+
+  // (b) Else: first "Vector" parameter.
+  if (!CDT) {
+    unsigned I = 0;
+    for (llvm::Argument &Arg : Fn.args()) {
+      bool IsVector = true;
+      if (I < ParamKinds.size())
+        IsVector = (ParamKinds[I] == ParamKindTy::Vector);
+
+      if (IsVector) {
+        CDT = getCanonicalCDTOrNull(Arg.getType(), DL);
+        if (CDT)
+          break;
+      }
+      ++I;
+    }
+  }
+
+  // (d) Default => int32.
+  if (!CDT)
+    CDT = llvm::Type::getInt32Ty(Fn.getContext());
+
+  llvm::TypeSize TS = DL.getTypeSizeInBits(CDT);
+
+  // If scalable, return minimum known size.
+  if (TS.isScalable())
+    return TS.getKnownMinValue();
+
+ 
+  return TS.getFixedValue();
+}
+
 void TargetRegionEntryInfo::getTargetRegionEntryFnName(
     SmallVectorImpl<char> &Name, StringRef ParentName, unsigned DeviceID,
     unsigned FileID, unsigned Line, unsigned Count) {
