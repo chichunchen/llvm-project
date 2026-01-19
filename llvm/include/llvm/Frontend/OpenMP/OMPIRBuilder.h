@@ -15,6 +15,7 @@
 #define LLVM_FRONTEND_OPENMP_OMPIRBUILDER_H
 
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/APSInt.h"
 #include "llvm/Frontend/Atomic/Atomic.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include "llvm/Frontend/OpenMP/OMPGridValues.h"
@@ -40,6 +41,24 @@ class OpenMPIRBuilder;
 class Loop;
 class LoopAnalysis;
 class LoopInfo;
+
+enum ParamKindTy {
+  Linear,
+  LinearRef,
+  LinearUVal,
+  LinearVal,
+  Uniform,
+  Vector,
+};
+/// Attribute set of the parameter.
+struct ParamAttrTy {
+  ParamKindTy Kind = Vector;
+  llvm::APSInt StrideOrArg;
+  llvm::APSInt Alignment;
+  bool HasVarStride = false;
+};
+
+enum class DeclareSimdBranchState { Undefined, Inbranch, Notinbranch };
 
 namespace vfs {
 class FileSystem;
@@ -3854,6 +3873,12 @@ public:
   LLVM_ABI GlobalVariable *
   getOrCreateInternalVariable(Type *Ty, const StringRef &Name,
                               std::optional<unsigned> AddressSpace = {});
+  
+  LLVM_ABI void
+  emitX86DeclareSimdFunction(unsigned NumElements, llvm::Function *Fn,
+                            const llvm::APSInt &VLENVal,
+                            ArrayRef<ParamAttrTy> ParamAttrs,
+                            DeclareSimdBranchState State);
 };
 
 /// Class to represented the control flow structure of an OpenMP canonical loop.

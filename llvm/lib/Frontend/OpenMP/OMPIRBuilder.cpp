@@ -11061,27 +11061,6 @@ void OpenMPIRBuilder::createOffloadEntriesAndInfoMetadata(
         Config.getRequiresFlags());
 }
 
-enum class DeclareSimdBranchState { Undefined, Inbranch, Notinbranch };
-
-namespace {
-  /// Kind of parameter in a function with 'declare simd' directive.
-enum ParamKindTy {
-  Linear,
-  LinearRef,
-  LinearUVal,
-  LinearVal,
-  Uniform,
-  Vector,
-};
-/// Attribute set of the parameter.
-struct ParamAttrTy {
-  ParamKindTy Kind = Vector;
-  llvm::APSInt StrideOrArg;
-  llvm::APSInt Alignment;
-  bool HasVarStride = false;
-};
-} // namespace
-
 /// Mangle the parameter part of the vector function name according to
 /// their OpenMP classification. The mangling function is defined in
 /// section 4.5 of the AAVFABI(2021Q1).
@@ -11128,11 +11107,11 @@ static std::string mangleVectorParameters(ArrayRef<ParamAttrTy> ParamAttrs) {
   return std::string(Out.str());
 }
 
-static void
-emitX86DeclareSimdFunction(unsigned NumElements, llvm::Function *Fn,
-                           const llvm::APSInt &VLENVal,
-                           ArrayRef<ParamAttrTy> ParamAttrs,
-                           DeclareSimdBranchState State) {
+void
+OpenMPIRBuilder::emitX86DeclareSimdFunction(unsigned NumElements, llvm::Function *Fn,
+                                            const llvm::APSInt &VLENVal,
+                                            ArrayRef<llvm::ParamAttrTy> ParamAttrs,
+                                            llvm::DeclareSimdBranchState State) {
   struct ISADataTy {
     char ISA;
     unsigned VecRegSize;
@@ -11153,14 +11132,14 @@ emitX86DeclareSimdFunction(unsigned NumElements, llvm::Function *Fn,
   };
   llvm::SmallVector<char, 2> Masked;
   switch (State) {
-  case DeclareSimdBranchState::Undefined:
+  case llvm::DeclareSimdBranchState::Undefined:
     Masked.push_back('N');
     Masked.push_back('M');
     break;
-  case DeclareSimdBranchState::Notinbranch:
+  case llvm::DeclareSimdBranchState::Notinbranch:
     Masked.push_back('N');
     break;
-  case DeclareSimdBranchState::Inbranch:
+  case llvm::DeclareSimdBranchState::Inbranch:
     Masked.push_back('M');
     break;
   }
@@ -11183,6 +11162,186 @@ emitX86DeclareSimdFunction(unsigned NumElements, llvm::Function *Fn,
       Fn->addFnAttr(Out.str());
     }
   }
+}
+
+// Function used to add the attribute. The parameter `VLEN` is
+// templated to allow the use of "x" when targeting scalable functions
+// for SVE.
+template <typename T>
+static void addAArch64VectorName(T VLEN, StringRef LMask, StringRef Prefix,
+                                 char ISA, StringRef ParSeq,
+                                 StringRef MangledName, bool OutputBecomesInput,
+                                 llvm::Function *Fn) {
+  SmallString<256> Buffer;
+  llvm::raw_svector_ostream Out(Buffer);
+  Out << Prefix << ISA << LMask << VLEN;
+  if (OutputBecomesInput)
+    Out << "v";
+  Out << ParSeq << "_" << MangledName;
+  Fn->addFnAttr(Out.str());
+}
+
+// Helper function to generate the Advanced SIMD names depending on
+// the value of the NDS when simdlen is not present.
+static void addAArch64AdvSIMDNDSNames(unsigned NDS, StringRef Mask,
+                                      StringRef Prefix, char ISA,
+                                      StringRef ParSeq, StringRef MangledName,
+                                      bool OutputBecomesInput,
+                                      llvm::Function *Fn) {
+  switch (NDS) {
+  case 8:
+    addAArch64VectorName(8, Mask, Prefix, ISA, ParSeq, MangledName,
+                         OutputBecomesInput, Fn);
+    addAArch64VectorName(16, Mask, Prefix, ISA, ParSeq, MangledName,
+                         OutputBecomesInput, Fn);
+    break;
+  case 16:
+    addAArch64VectorName(4, Mask, Prefix, ISA, ParSeq, MangledName,
+                         OutputBecomesInput, Fn);
+    addAArch64VectorName(8, Mask, Prefix, ISA, ParSeq, MangledName,
+                         OutputBecomesInput, Fn);
+    break;
+  case 32:
+    addAArch64VectorName(2, Mask, Prefix, ISA, ParSeq, MangledName,
+                         OutputBecomesInput, Fn);
+    addAArch64VectorName(4, Mask, Prefix, ISA, ParSeq, MangledName,
+                         OutputBecomesInput, Fn);
+    break;
+  case 64:
+  case 128:
+    addAArch64VectorName(2, Mask, Prefix, ISA, ParSeq, MangledName,
+                         OutputBecomesInput, Fn);
+    break;
+  default:
+    llvm_unreachable("Scalar type is too wide.");
+  }
+}
+
+// In OMPIRBuilder (or a helper in the same TU).
+static bool getAArch64MTV(llvm::Type *Ty, ParamKindTy Kind,
+                          bool IsReferenceLike) {
+  assert(Ty && "null type");
+
+  if (Ty->isVoidTy())
+    return false;
+
+  if (Kind == ParamKindTy::Uniform)
+    return false;
+
+  if (Kind == ParamKindTy::LinearUVal || Kind == ParamKindTy::LinearRef)
+    return false;
+
+  // Clang's rule: (Linear or LinearVal) requires the original parameter to be a
+  // reference type. LLVM IR can't tell, so the caller must provide it.
+  if ((Kind == ParamKindTy::Linear || Kind == ParamKindTy::LinearVal) &&
+      !IsReferenceLike)
+    return false;
+
+  return true;
+}
+
+static unsigned getTypeSizeInBits(llvm::Type *Ty, const llvm::DataLayout &DL) {
+  llvm::TypeSize TS = DL.getTypeSizeInBits(Ty);
+  // For scalable types, use the known minimum (matches LLVM conventions).
+  return TS.isScalable() ? TS.getKnownMinValue() : TS.getFixedValue();
+}
+
+/// Pass By Value (PBV), as defined in 3.1.2 of the AAVFABI.
+/// LLVM port: only handles float/int/pointer directly (complex remains TODO).
+static bool getAArch64PBV(llvm::Type *Ty, const llvm::DataLayout &DL) {
+  // Canonicalization is effectively “already done” in LLVM Type.
+  unsigned Size = getTypeSizeInBits(Ty, DL);
+
+  // Only scalars and complex within 16 bytes wide set PBV to true.
+  if (Size != 8 && Size != 16 && Size != 32 && Size != 64 && Size != 128)
+    return false;
+
+  if (Ty->isFloatingPointTy())
+    return true;
+
+  if (Ty->isIntegerTy())
+    return true;
+
+  if (Ty->isPointerTy())
+    return true;
+
+  // TODO: Detect “complex” lowering patterns if you want parity with Clang.
+  // E.g. some ABIs lower complex to {float,float} / {double,double}.
+  return false;
+}
+
+/// Computes lane size (LS) of a return type or input parameter per AAVFABI 3.2.1.
+/// LLVM port:
+/// - `IsReferenceLike` replaces QualType::isReferenceType().
+/// - `PointeeTyIfKnown` is needed for opaque pointers.
+static unsigned getAArch64LS(llvm::Type *Ty, ParamKindTy Kind,
+                             const llvm::DataLayout &DL,
+                             bool IsReferenceLike = false,
+                             llvm::Type *PointeeTyIfKnown = nullptr) {
+  // Mirrors:
+  // if (!getAArch64MTV(QT, Kind) && QT->isPointerType()) { ... }
+  if (!getAArch64MTV(Ty, Kind, IsReferenceLike) && Ty->isPointerTy()) {
+    if (PointeeTyIfKnown && getAArch64PBV(PointeeTyIfKnown, DL))
+      return getTypeSizeInBits(PointeeTyIfKnown, DL);
+
+    // Opaque pointer / unknown pointee => fall through to pointer-size behavior.
+  }
+
+  if (getAArch64PBV(Ty, DL))
+    return getTypeSizeInBits(Ty, DL);
+
+  // sizeof(uintptr)
+  // Prefer DL query (default AS=0).
+  return DL.getPointerSizeInBits(/*AddressSpace=*/0);
+}
+
+/// Return {NDS, WDS, OutputBecomesInput}.
+static std::tuple<unsigned, unsigned, bool>
+getNDSWDS(const llvm::Function &Fn, llvm::ArrayRef<ParamAttrTy> ParamAttrs,
+          llvm::ArrayRef<bool> IsReferenceLike, const llvm::DataLayout &DL) {
+  llvm::Type *RetTy = Fn.getReturnType();
+
+  bool OutputBecomesInput = false;
+  llvm::SmallVector<unsigned, 8> Sizes;
+
+  auto getLSFor = [&](llvm::Type *Ty, ParamKindTy Kind, bool RefLike) -> unsigned {
+    return getAArch64LS(Ty, Kind, DL, RefLike);
+  };
+
+  // Return type contributes unless void.
+  if (!RetTy->isVoidTy()) {
+    Sizes.push_back(getLSFor(RetTy, ParamKindTy::Vector, /*RefLike=*/false));
+
+    // Matches Clang logic:
+    // if (!PBV(ret) && MTV(ret, Vector)) OutputBecomesInput = true;
+    if (!getAArch64PBV(RetTy, DL) &&
+        getAArch64MTV(RetTy, /*Kind=*/ParamKindTy::Vector, /*RefLike=*/false)) {
+      OutputBecomesInput = true;
+    }
+  }
+
+  // Parameters.
+  unsigned NumParams = Fn.arg_size();
+  assert(ParamAttrs.size() == NumParams && "ParamAttrs size mismatch");
+  assert(IsReferenceLike.size() == NumParams && "IsReferenceLike size mismatch");
+
+  unsigned I = 0;
+  for (const llvm::Argument &Arg : Fn.args()) {
+    llvm::Type *Ty = Arg.getType();
+    Sizes.push_back(getLSFor(Ty, ParamAttrs[I].Kind, IsReferenceLike[I]));
+    ++I;
+  }
+
+  assert(!Sizes.empty() && "Unable to determine NDS and WDS.");
+
+  // LS must be power-of-two among {8,16,32,64,128}.
+  assert(llvm::all_of(Sizes, [](unsigned S) {
+    return S == 8 || S == 16 || S == 32 || S == 64 || S == 128;
+  }) && "Invalid LS");
+
+  return { *llvm::min_element(Sizes),
+           *llvm::max_element(Sizes),
+           OutputBecomesInput };
 }
 
 static llvm::Type *getCanonicalCDTOrNull(llvm::Type *Ty,
