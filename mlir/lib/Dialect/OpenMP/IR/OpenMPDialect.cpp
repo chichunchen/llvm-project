@@ -4561,6 +4561,116 @@ static void printAffinityClause(OpAsmPrinter &p, Operation *op,
   }
 }
 
+//===----------------------------------------------------------------------===//
+// Parser and printer for Iterator modifier
+//===----------------------------------------------------------------------===//
+
+static ParseResult parseIteratorsHeader(
+    OpAsmParser &parser, Region &region,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &lbs,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &ubs,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &steps,
+    SmallVectorImpl<Type> &lbTypes,
+    SmallVectorImpl<Type> &ubTypes,
+    SmallVectorImpl<Type> &stepTypes) {
+
+  Builder &b = parser.getBuilder();
+  Type idxTy = b.getIndexType();
+
+  // Parse: %i, %j  (and optional ": index" after each)
+  SmallVector<OpAsmParser::Argument> ivArgs;
+  if (parser.parseCommaSeparatedList([&]() -> ParseResult {
+        OpAsmParser::Argument arg;
+        if (parser.parseArgument(arg))
+          return failure();
+
+        // Accept optional ": <type>" after IV
+        if (succeeded(parser.parseOptionalColon())) {
+          Type explicitTy;
+          if (parser.parseType(explicitTy))
+            return failure();
+          if (explicitTy != idxTy)
+            return parser.emitError(parser.getCurrentLocation())
+                   << "iterator induction variable must have type 'index'";
+        }
+
+        arg.type = idxTy;
+        ivArgs.push_back(arg);
+        return success();
+      }))
+    return failure();
+
+  // This is the ')' that matches the '(' from the assemblyFormat.
+  if (parser.parseRParen())
+    return failure();
+
+  // Parse: =
+  if (parser.parseEqual())
+    return failure();
+
+  // Parse: (%lb0 to %ub0 step %st0, ...)
+  if (parser.parseLParen())
+    return failure();
+
+  unsigned numRanges = 0;
+  if (parser.parseCommaSeparatedList([&]() -> ParseResult {
+        OpAsmParser::UnresolvedOperand lb, ub, st;
+        if (parser.parseOperand(lb) || parser.parseKeyword("to") ||
+            parser.parseOperand(ub) || parser.parseKeyword("step") ||
+            parser.parseOperand(st))
+          return failure();
+
+        lbs.push_back(lb);
+        ubs.push_back(ub);
+        steps.push_back(st);
+
+        lbTypes.push_back(idxTy);
+        ubTypes.push_back(idxTy);
+        stepTypes.push_back(idxTy);
+
+        ++numRanges;
+        return success();
+      }))
+    return failure();
+
+  if (parser.parseRParen())
+    return failure();
+
+  if (ivArgs.size() != numRanges)
+    return parser.emitError(parser.getCurrentLocation())
+           << "expected " << ivArgs.size()
+           << " iterator ranges, got " << numRanges;
+
+  if (parser.parseRegion(region, ivArgs))
+    return failure();
+
+  return success();
+}
+
+static void printIteratorsHeader(
+    OpAsmPrinter &p, Operation *op, Region &region,
+    ValueRange lbs, ValueRange ubs, ValueRange steps,
+    TypeRange, TypeRange, TypeRange) {
+
+  Block &entry = region.front();
+
+  for (unsigned i = 0, e = entry.getNumArguments(); i < e; ++i) {
+    if (i) p << ", ";
+    p.printRegionArgument(entry.getArgument(i));
+  }
+  p << ") = (";
+
+  // (%lb0 to %ub0 step %st0, ...)
+  for (unsigned i = 0, e = lbs.size(); i < e; ++i) {
+    if (i) p << ", ";
+    p << lbs[i] << " to " << ubs[i] << " step " << steps[i];
+  }
+  p << ") ";
+
+  p.printRegion(region, /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/true);
+}
+
 #define GET_ATTRDEF_CLASSES
 #include "mlir/Dialect/OpenMP/OpenMPOpsAttributes.cpp.inc"
 

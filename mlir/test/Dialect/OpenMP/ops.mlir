@@ -3550,3 +3550,58 @@ func.func @task_affinity_multi() {
   }
   return
 }
+
+// CHECK-LABEL: func.func @iterators_simple
+func.func @iterators_simple() -> !omp.iter_set {
+  %c0 = arith.constant 0 : index
+  %c4 = arith.constant 4 : index
+  %c1 = arith.constant 1 : index
+
+  // Capture just the SSA name for the IV (no type)
+  // CHECK: %[[SET:.*]] = omp.iterators(%[[IV:[^:]+]]: index) = (%c0 to %c4 step %c1) {
+  // CHECK:   omp.yield(%[[IV]] : index)
+  // CHECK: }
+  // CHECK: return %[[SET]] : !omp.iter_set
+  %set = omp.iterators(%i) = (%c0 to %c4 step %c1) {
+    omp.yield(%i : index)
+  }
+
+  return %set : !omp.iter_set
+}
+
+// CHECK-LABEL: func.func @iterators_two
+func.func @iterators_two() -> !omp.iter_set {
+  %lb0 = arith.constant 0 : index
+  %ub0 = arith.constant 3 : index
+  %st0 = arith.constant 1 : index
+  %lb1 = arith.constant 5 : index
+  %ub1 = arith.constant 9 : index
+  %st1 = arith.constant 2 : index
+
+  // CHECK: %[[C0:.*]] = arith.constant 0 : index
+  // CHECK: %[[C3:.*]] = arith.constant 3 : index
+  // CHECK: %[[C1:.*]] = arith.constant 1 : index
+  // CHECK: %[[C5:.*]] = arith.constant 5 : index
+  // CHECK: %[[C9:.*]] = arith.constant 9 : index
+  // CHECK: %[[C2:.*]] = arith.constant 2 : index
+
+  // CHECK: %[[SET:.*]] = omp.iterators(%[[I0:[^:]+]]: index, %[[I1:[^:]+]]: index) = (%[[C0]] to %[[C3]] step %[[C1]], %[[C5]] to %[[C9]] step %[[C2]]) {
+
+  // CHECK:   %[[V0:.*]] = arith.index_cast %[[I0]] : index to i64
+  // CHECK:   %[[V1:.*]] = arith.index_cast %[[I1]] : index to i64
+  // CHECK:   %[[SUM:.*]] = arith.addi %[[V0]], %[[V1]] : i64
+
+  // CHECK:   omp.yield(%[[SUM]] : i64)
+  // CHECK: }
+  // CHECK: return %[[SET]] : !omp.iter_set
+
+  %set = omp.iterators(%i, %j) =
+    (%lb0 to %ub0 step %st0, %lb1 to %ub1 step %st1) {
+    %ii = arith.index_cast %i : index to i64
+    %jj = arith.index_cast %j : index to i64
+    %desc = arith.addi %ii, %jj : i64
+    omp.yield (%desc : i64)
+  }
+
+  return %set : !omp.iter_set
+}

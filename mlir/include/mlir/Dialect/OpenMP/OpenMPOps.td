@@ -822,7 +822,7 @@ def SimdOp : OpenMP_Op<"simd", traits = [
 def YieldOp : OpenMP_Op<"yield",
     [Pure, ReturnLike, Terminator,
      ParentOneOf<["AtomicUpdateOp", "DeclareReductionOp", "LoopNestOp",
-                  "PrivateClauseOp"]>]> {
+                  "PrivateClauseOp", "IteratorsOp"]>]> {
   let summary = "loop yield and termination operation";
   let description = [{
     "omp.yield" yields SSA values from the OpenMP dialect op region and
@@ -2271,6 +2271,52 @@ def DeclareSimdOp
       ins CArg<"const DeclareSimdOperands &">:$clauses)>];
 
   let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Iterator modifier
+//===----------------------------------------------------------------------===//
+
+def IterSetType : TypeDef<OpenMP_Dialect, "IterSet"> {
+  let mnemonic = "iter_set";
+
+  let summary = "Set of iterator-produced clause items";
+
+  let description = [{
+    Opaque handle representing a set of values produced by omp.iterators.
+    Intended to be consumed by OpenMP clauses (affinity/depend/map/to/from)
+    and eliminated during lowering; not a runtime value.
+  }];
+}
+
+def IteratorsOp : OpenMP_Op<"iterators", [
+    AttrSizedOperandSegments,
+    SingleBlockImplicitTerminator<"YieldOp">
+  ]> {
+  let summary = "Iterator scope producing a set of yielded items";
+
+  // For k iterators, lbs/ubs/steps each have size k.
+  let arguments = (ins
+    Variadic<Index>:$lbs,
+    Variadic<Index>:$ubs,
+    Variadic<Index>:$steps
+  );
+
+  // Region args are the iterator SSA values.
+  let regions = (region SizedRegion<1>:$region);
+
+  let results = (outs IterSetType:$set);
+
+  let extraClassDeclaration = [{
+    unsigned getNumIters() { return getLbs().size(); }
+  }];
+
+  let assemblyFormat = [{
+    `(` custom<IteratorsHeader>($region,
+                                $lbs, $ubs, $steps,
+                                type($lbs), type($ubs), type($steps))
+    attr-dict
+  }];
 }
 
 #endif // OPENMP_OPS
