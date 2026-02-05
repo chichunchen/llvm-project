@@ -2277,25 +2277,12 @@ def DeclareSimdOp
 // Iterator modifier
 //===----------------------------------------------------------------------===//
 
-def IterSetType : TypeDef<OpenMP_Dialect, "IterSet"> {
-  let mnemonic = "iter_set";
-
-  let summary = "Set of iterator-produced clause items";
-
-  let description = [{
-    Opaque handle representing a set of values produced by omp.iterators.
-    Intended to be consumed by OpenMP clauses (affinity/depend/map/to/from)
-    and eliminated during lowering; not a runtime value.
-  }];
-}
-
 def IteratorsOp : OpenMP_Op<"iterators", [
     AttrSizedOperandSegments,
     SingleBlockImplicitTerminator<"YieldOp">
   ]> {
   let summary = "Iterator scope producing a set of yielded items";
 
-  // For k iterators, lbs/ubs/steps each have size k.
   let arguments = (ins
     Variadic<Index>:$lbs,
     Variadic<Index>:$ubs,
@@ -2305,7 +2292,7 @@ def IteratorsOp : OpenMP_Op<"iterators", [
   // Region args are the iterator SSA values.
   let regions = (region SizedRegion<1>:$region);
 
-  let results = (outs IterSetType:$set);
+  let results = (outs OpenMP_IteratedType:$iterated);
 
   let extraClassDeclaration = [{
     unsigned getNumIters() { return getLbs().size(); }
@@ -2315,6 +2302,7 @@ def IteratorsOp : OpenMP_Op<"iterators", [
     `(` custom<IteratorsHeader>($region,
                                 $lbs, $ubs, $steps,
                                 type($lbs), type($ubs), type($steps))
+    `->` type($iterated)
     attr-dict
   }];
 }

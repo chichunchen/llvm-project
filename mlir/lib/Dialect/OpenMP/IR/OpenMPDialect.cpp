@@ -3137,7 +3137,7 @@ LogicalResult DeclareReductionOp::verifyRegions() {
 void TaskOp::build(OpBuilder &builder, OperationState &state,
                    const TaskOperands &clauses) {
   MLIRContext *ctx = builder.getContext();
-  TaskOp::build(builder, state, clauses.affinityVars, clauses.allocateVars,
+  TaskOp::build(builder, state, clauses.iterated, clauses.affinityVars, clauses.allocateVars,
                 clauses.allocatorVars, makeArrayAttr(ctx, clauses.dependKinds),
                 clauses.dependVars, clauses.final, clauses.ifExpr,
                 clauses.inReductionVars,
@@ -4539,26 +4539,93 @@ static void printUniformClause(OpAsmPrinter &p, Operation *op,
 // Parser and printer for Affinity Clause
 //===----------------------------------------------------------------------===//
 
-static ParseResult parseAffinityClause(
+static bool isIteratedType(Type t) {
+  return llvm::isa<mlir::omp::IteratedType>(t);
+}
+
+/// Parses a comma-separated list of items of the form:
+///   <prefix...> <operand> : <type>
+/// and splits into iterated vs non-iterated based on <type>.
+///
+/// `parsePrefix` lets each clause keep its existing syntax:
+/// - affinity: no prefix
+/// - depend: parse `keyword ->`
+///
+/// The callback should parse any per-item prefix and return success().
+template <typename ParsePrefixFn>
+static ParseResult parseSplitIteratedList(
     OpAsmParser &parser,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &affinityVars,
-    SmallVectorImpl<Type> &affinityTypes) {
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &iteratedVars,
+    SmallVectorImpl<Type> &iteratedTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &plainVars,
+    SmallVectorImpl<Type> &plainTypes,
+    ParsePrefixFn &&parsePrefix) {
+
   return parser.parseCommaSeparatedList([&]() -> ParseResult {
-    if (parser.parseOperand(affinityVars.emplace_back()) ||
-        parser.parseColonType(affinityTypes.emplace_back()))
+    if (failed(parsePrefix()))
       return failure();
+
+    OpAsmParser::UnresolvedOperand v;
+    Type ty;
+    if (parser.parseOperand(v) || parser.parseColonType(ty))
+      return failure();
+
+    if (isIteratedType(ty)) {
+      iteratedVars.push_back(v);
+      iteratedTypes.push_back(ty);
+    } else {
+      plainVars.push_back(v);
+      plainTypes.push_back(ty);
+    }
     return success();
   });
 }
 
+template <typename PrintPrefixFn>
+static void printSplitIteratedList(
+    OpAsmPrinter &p,
+    ValueRange iteratedVars, TypeRange iteratedTypes,
+    ValueRange plainVars, TypeRange plainTypes,
+    PrintPrefixFn &&printPrefixForPlain,
+    PrintPrefixFn &&printPrefixForIterated) {
+
+  bool first = true;
+  auto emit = [&](Value v, Type t, auto &&printPrefix) {
+    if (!first) p << ", ";
+    printPrefix(v, t);
+    p << v << " : " << t;
+    first = false;
+  };
+
+  // Canonical: iterated first, then plain.
+  for (unsigned i = 0; i < iteratedVars.size(); ++i)
+    emit(iteratedVars[i], iteratedTypes[i], printPrefixForIterated);
+  for (unsigned i = 0; i < plainVars.size(); ++i)
+    emit(plainVars[i], plainTypes[i], printPrefixForPlain);
+}
+
+static ParseResult parseAffinityClause(
+    OpAsmParser &parser,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &iteratedVars,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &affinityVars,
+    SmallVectorImpl<Type> &iteratedTypes, SmallVectorImpl<Type> &affinityTypes) {
+
+  return parseSplitIteratedList(
+      parser,
+      iteratedVars, iteratedTypes,
+      affinityVars, affinityTypes,
+      /*parsePrefix=*/[&]() -> ParseResult { return success(); });
+}
+
 static void printAffinityClause(OpAsmPrinter &p, Operation *op,
-                                ValueRange affinityVars,
-                                TypeRange affinityTypes) {
-  for (unsigned i = 0; i < affinityVars.size(); ++i) {
-    if (i)
-      p << ", ";
-    p << affinityVars[i] << " : " << affinityTypes[i];
-  }
+                                ValueRange iteratedVars, ValueRange affinityVars,
+                                TypeRange iteratedTypes, TypeRange affinityTypes) {
+  auto nop = [&](Value, Type) {};
+  printSplitIteratedList(p,
+                         iteratedVars, iteratedTypes,
+                         affinityVars, affinityTypes,
+                         /*plain prefix*/ nop,
+                         /*iterated prefix*/ nop);
 }
 
 //===----------------------------------------------------------------------===//

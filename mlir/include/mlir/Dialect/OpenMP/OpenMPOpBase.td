@@ -280,4 +280,15 @@ class OpenMPTransformBase_Op<string mnemonic,
                          # [{ attr-dict }];
 }
 
+def OpenMP_IteratedType : OpenMP_Type<"Iterated", "iterated"> {
+  let summary = "OpenMP iterator-produced list handle";
+  let description = [{
+    Represents a runtime-sized list of elements of a given element type,
+    produced via an OpenMP iterator modifier template.
+  }];
+
+  let parameters = (ins "Type": $elementType);
+  let assemblyFormat = "`<` $elementType `>`";
+}
+
 #endif  // OPENMP_OP_BASE
