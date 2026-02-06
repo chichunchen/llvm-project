@@ -291,4 +291,23 @@ def OpenMP_IteratedType : OpenMP_Type<"Iterated", "iterated"> {
   let assemblyFormat = "`<` $elementType `>`";
 }
 
+def OpenMP_AffinityEntryType : OpenMP_Type<"AffinityEntry", "affinity_entry"> {
+  let summary = "OpenMP task affinity locator entry";
+  let description = [{
+    A structured affinity locator entry. This is the element type to be used
+    for affinity lists and for omp.iterated<...> produced by iterator modifiers.
+    It contains the base address and the byte length of the referenced memory.
+  }];
+
+  // addr: pointer-like (opaque llvm.ptr in your current pipeline)
+  // len:  integer byte size (use i64 to match common libomp ABI expectations)
+  let parameters = (ins "Type": $addrType, "Type": $lenType);
+  let assemblyFormat = "`<` $addrType `,` $lenType `>`";
+}
+
+def OpenMP_AffinityItemType : AnyTypeOf<
+  [ OpenMP_AffinityEntryType,
+    OpenMP_PointerLikeType
+  ]>;
+
 #endif  // OPENMP_OP_BASE

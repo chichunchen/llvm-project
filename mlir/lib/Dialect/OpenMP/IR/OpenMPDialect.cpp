@@ -4543,6 +4543,10 @@ static bool isIteratedType(Type t) {
   return llvm::isa<mlir::omp::IteratedType>(t);
 }
 
+static bool isAffinityEntryType(Type t) {
+  return llvm::isa<mlir::omp::AffinityEntryType>(t);
+}
+
 /// Parses a comma-separated list of items of the form:
 ///   <prefix...> <operand> : <type>
 /// and splits into iterated vs non-iterated based on <type>.
@@ -4608,22 +4612,45 @@ static ParseResult parseAffinityClause(
     OpAsmParser &parser,
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &iteratedVars,
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &affinityVars,
-    SmallVectorImpl<Type> &iteratedTypes, SmallVectorImpl<Type> &affinityTypes) {
+    SmallVectorImpl<Type> &iteratedTypes,
+    SmallVectorImpl<Type> &affinityVarTypes) {
 
-  return parseSplitIteratedList(
-      parser,
-      iteratedVars, iteratedTypes,
-      affinityVars, affinityTypes,
-      /*parsePrefix=*/[&]() -> ParseResult { return success(); });
+  if (failed(parseSplitIteratedList(
+          parser,
+          iteratedVars, iteratedTypes,
+          affinityVars, affinityVarTypes,
+          /*parsePrefix=*/[&]() -> ParseResult { return success(); })))
+    return failure();
+
+  // for (Type t : affinityEntryTypes) {
+  //   if (!isAffinityEntryType(t))
+  //     return parser.emitError(parser.getCurrentLocation())
+  //            << "affinity clause expects !omp.affinity_entry for non-iterated items, got "
+  //            << t;
+  // }
+
+  // Also sanity-check iterated element type (Case A requirement):
+  // for (Type t : iteratedTypes) {
+  //   auto it = llvm::dyn_cast<mlir::omp::IteratedType>(t);
+  //   if (!it)
+  //     return parser.emitError(parser.getCurrentLocation())
+  //            << "expected !omp.iterated<...>, got " << t;
+  //   if (!isAffinityEntryType(it.getElementType()))
+  //     return parser.emitError(parser.getCurrentLocation())
+  //            << "affinity iterated items must be !omp.iterated<!omp.affinity_entry<...>>, got "
+  //            << t;
+  // }
+
+  return success();
 }
 
 static void printAffinityClause(OpAsmPrinter &p, Operation *op,
                                 ValueRange iteratedVars, ValueRange affinityVars,
-                                TypeRange iteratedTypes, TypeRange affinityTypes) {
+                                TypeRange iteratedTypes, TypeRange affinityVarTypes) {
   auto nop = [&](Value, Type) {};
   printSplitIteratedList(p,
                          iteratedVars, iteratedTypes,
-                         affinityVars, affinityTypes,
+                         affinityVars, affinityVarTypes,
                          /*plain prefix*/ nop,
                          /*iterated prefix*/ nop);
 }
@@ -4631,6 +4658,27 @@ static void printAffinityClause(OpAsmPrinter &p, Operation *op,
 //===----------------------------------------------------------------------===//
 // Parser and printer for Iterator modifier
 //===----------------------------------------------------------------------===//
+
+LogicalResult IteratorsOp::verify() {
+  auto itTy = llvm::dyn_cast<omp::IteratedType>(getIterated().getType());
+  if (!itTy)
+    return emitOpError() << "result must be !omp.iterated<...>";
+
+  Block &b = getRegion().front();
+  auto yield = llvm::dyn_cast<omp::YieldOp>(b.getTerminator());
+  if (!yield)
+    return emitOpError() << "region must terminate with omp.yield";
+
+  if (yield.getResults().size() != 1)
+    return emitOpError() << "omp.yield must yield exactly one value";
+
+  if (yield.getResults()[0].getType() != itTy.getElementType())
+    return emitOpError()
+           << "yielded type " << yield.getResults()[0].getType()
+           << " does not match iterated element type " << itTy.getElementType();
+
+  return success();
+}
 
 static ParseResult parseIteratorsHeader(
     OpAsmParser &parser, Region &region,

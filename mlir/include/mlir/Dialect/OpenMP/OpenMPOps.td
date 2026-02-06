@@ -2305,6 +2305,28 @@ def IteratorsOp : OpenMP_Op<"iterators", [
     `->` type($iterated)
     attr-dict
   }];
+
+  let hasVerifier = 1;
+}
+
+def AffinityEntryOp : OpenMP_Op<"affinity_entry", [Pure]> {
+  let summary = "Create an OpenMP affinity entry value";
+  let description = [{
+    Materializes a structured affinity entry from an address and a byte length.
+    The resulting value can be used directly in affinity clauses or as the
+    yielded element type of omp.iterators for affinity.
+  }];
+
+  let arguments = (ins
+    OpenMP_PointerLikeType:$addr,
+    I64:$len
+  );
+
+  let results = (outs OpenMP_AffinityEntryType:$entry);
+
+  let assemblyFormat = [{
+    $addr `,` $len `:` `(` type($addr) `,` type($len) `)` `->` qualified(type($entry)) attr-dict
+  }];
 }
 
 #endif // OPENMP_OPS
