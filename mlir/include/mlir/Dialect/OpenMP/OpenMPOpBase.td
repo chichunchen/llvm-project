@@ -287,7 +287,7 @@ def OpenMP_IteratedType : OpenMP_Type<"Iterated", "iterated"> {
     produced via an OpenMP iterator modifier template.
   }];
 
-  let parameters = (ins "Type": $elementType);
+  let parameters = (ins "Type":$elementType);
   let assemblyFormat = "`<` $elementType `>`";
 }
 
@@ -301,13 +301,11 @@ def OpenMP_AffinityEntryType : OpenMP_Type<"AffinityEntry", "affinity_entry"> {
 
   // addr: pointer-like (opaque llvm.ptr in your current pipeline)
   // len:  integer byte size (use i64 to match common libomp ABI expectations)
-  let parameters = (ins "Type": $addrType, "Type": $lenType);
+  let parameters = (ins "Type":$addrType, "Type":$lenType);
   let assemblyFormat = "`<` $addrType `,` $lenType `>`";
 }
 
-def OpenMP_AffinityItemType : AnyTypeOf<
-  [ OpenMP_AffinityEntryType,
-    OpenMP_PointerLikeType
-  ]>;
+def OpenMP_AffinityItemType
+    : AnyTypeOf<[OpenMP_AffinityEntryType, OpenMP_PointerLikeType]>;
 
 #endif  // OPENMP_OP_BASE

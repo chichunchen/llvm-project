@@ -3137,10 +3137,10 @@ LogicalResult DeclareReductionOp::verifyRegions() {
 void TaskOp::build(OpBuilder &builder, OperationState &state,
                    const TaskOperands &clauses) {
   MLIRContext *ctx = builder.getContext();
-  TaskOp::build(builder, state, clauses.iterated, clauses.affinityVars, clauses.allocateVars,
-                clauses.allocatorVars, makeArrayAttr(ctx, clauses.dependKinds),
-                clauses.dependVars, clauses.final, clauses.ifExpr,
-                clauses.inReductionVars,
+  TaskOp::build(builder, state, clauses.iterated, clauses.affinityVars,
+                clauses.allocateVars, clauses.allocatorVars,
+                makeArrayAttr(ctx, clauses.dependKinds), clauses.dependVars,
+                clauses.final, clauses.ifExpr, clauses.inReductionVars,
                 makeDenseBoolArrayAttr(ctx, clauses.inReductionByref),
                 makeArrayAttr(ctx, clauses.inReductionSyms), clauses.mergeable,
                 clauses.priority, /*private_vars=*/clauses.privateVars,
@@ -4562,8 +4562,7 @@ static ParseResult parseSplitIteratedList(
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &iteratedVars,
     SmallVectorImpl<Type> &iteratedTypes,
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &plainVars,
-    SmallVectorImpl<Type> &plainTypes,
-    ParsePrefixFn &&parsePrefix) {
+    SmallVectorImpl<Type> &plainTypes, ParsePrefixFn &&parsePrefix) {
 
   return parser.parseCommaSeparatedList([&]() -> ParseResult {
     if (failed(parsePrefix()))
@@ -4586,16 +4585,16 @@ static ParseResult parseSplitIteratedList(
 }
 
 template <typename PrintPrefixFn>
-static void printSplitIteratedList(
-    OpAsmPrinter &p,
-    ValueRange iteratedVars, TypeRange iteratedTypes,
-    ValueRange plainVars, TypeRange plainTypes,
-    PrintPrefixFn &&printPrefixForPlain,
-    PrintPrefixFn &&printPrefixForIterated) {
+static void printSplitIteratedList(OpAsmPrinter &p, ValueRange iteratedVars,
+                                   TypeRange iteratedTypes,
+                                   ValueRange plainVars, TypeRange plainTypes,
+                                   PrintPrefixFn &&printPrefixForPlain,
+                                   PrintPrefixFn &&printPrefixForIterated) {
 
   bool first = true;
   auto emit = [&](Value v, Type t, auto &&printPrefix) {
-    if (!first) p << ", ";
+    if (!first)
+      p << ", ";
     printPrefix(v, t);
     p << v << " : " << t;
     first = false;
@@ -4616,16 +4615,15 @@ static ParseResult parseAffinityClause(
     SmallVectorImpl<Type> &affinityVarTypes) {
 
   if (failed(parseSplitIteratedList(
-          parser,
-          iteratedVars, iteratedTypes,
-          affinityVars, affinityVarTypes,
+          parser, iteratedVars, iteratedTypes, affinityVars, affinityVarTypes,
           /*parsePrefix=*/[&]() -> ParseResult { return success(); })))
     return failure();
 
   // for (Type t : affinityEntryTypes) {
   //   if (!isAffinityEntryType(t))
   //     return parser.emitError(parser.getCurrentLocation())
-  //            << "affinity clause expects !omp.affinity_entry for non-iterated items, got "
+  //            << "affinity clause expects !omp.affinity_entry for non-iterated
+  //            items, got "
   //            << t;
   // }
 
@@ -4637,7 +4635,8 @@ static ParseResult parseAffinityClause(
   //            << "expected !omp.iterated<...>, got " << t;
   //   if (!isAffinityEntryType(it.getElementType()))
   //     return parser.emitError(parser.getCurrentLocation())
-  //            << "affinity iterated items must be !omp.iterated<!omp.affinity_entry<...>>, got "
+  //            << "affinity iterated items must be
+  //            !omp.iterated<!omp.affinity_entry<...>>, got "
   //            << t;
   // }
 
@@ -4645,12 +4644,13 @@ static ParseResult parseAffinityClause(
 }
 
 static void printAffinityClause(OpAsmPrinter &p, Operation *op,
-                                ValueRange iteratedVars, ValueRange affinityVars,
-                                TypeRange iteratedTypes, TypeRange affinityVarTypes) {
+                                ValueRange iteratedVars,
+                                ValueRange affinityVars,
+                                TypeRange iteratedTypes,
+                                TypeRange affinityVarTypes) {
   auto nop = [&](Value, Type) {};
-  printSplitIteratedList(p,
-                         iteratedVars, iteratedTypes,
-                         affinityVars, affinityVarTypes,
+  printSplitIteratedList(p, iteratedVars, iteratedTypes, affinityVars,
+                         affinityVarTypes,
                          /*plain prefix*/ nop,
                          /*iterated prefix*/ nop);
 }
@@ -4673,21 +4673,21 @@ LogicalResult IteratorsOp::verify() {
     return emitOpError() << "omp.yield must yield exactly one value";
 
   if (yield.getResults()[0].getType() != itTy.getElementType())
-    return emitOpError()
-           << "yielded type " << yield.getResults()[0].getType()
-           << " does not match iterated element type " << itTy.getElementType();
+    return emitOpError() << "yielded type " << yield.getResults()[0].getType()
+                         << " does not match iterated element type "
+                         << itTy.getElementType();
 
   return success();
 }
 
-static ParseResult parseIteratorsHeader(
-    OpAsmParser &parser, Region &region,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &lbs,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &ubs,
-    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &steps,
-    SmallVectorImpl<Type> &lbTypes,
-    SmallVectorImpl<Type> &ubTypes,
-    SmallVectorImpl<Type> &stepTypes) {
+static ParseResult
+parseIteratorsHeader(OpAsmParser &parser, Region &region,
+                     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &lbs,
+                     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &ubs,
+                     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &steps,
+                     SmallVectorImpl<Type> &lbTypes,
+                     SmallVectorImpl<Type> &ubTypes,
+                     SmallVectorImpl<Type> &stepTypes) {
 
   Builder &b = parser.getBuilder();
   Type idxTy = b.getIndexType();
@@ -4753,8 +4753,8 @@ static ParseResult parseIteratorsHeader(
 
   if (ivArgs.size() != numRanges)
     return parser.emitError(parser.getCurrentLocation())
-           << "expected " << ivArgs.size()
-           << " iterator ranges, got " << numRanges;
+           << "expected " << ivArgs.size() << " iterator ranges, got "
+           << numRanges;
 
   if (parser.parseRegion(region, ivArgs))
     return failure();
@@ -4762,22 +4762,24 @@ static ParseResult parseIteratorsHeader(
   return success();
 }
 
-static void printIteratorsHeader(
-    OpAsmPrinter &p, Operation *op, Region &region,
-    ValueRange lbs, ValueRange ubs, ValueRange steps,
-    TypeRange, TypeRange, TypeRange) {
+static void printIteratorsHeader(OpAsmPrinter &p, Operation *op, Region &region,
+                                 ValueRange lbs, ValueRange ubs,
+                                 ValueRange steps, TypeRange, TypeRange,
+                                 TypeRange) {
 
   Block &entry = region.front();
 
   for (unsigned i = 0, e = entry.getNumArguments(); i < e; ++i) {
-    if (i) p << ", ";
+    if (i)
+      p << ", ";
     p.printRegionArgument(entry.getArgument(i));
   }
   p << ") = (";
 
   // (%lb0 to %ub0 step %st0, ...)
   for (unsigned i = 0, e = lbs.size(); i < e; ++i) {
-    if (i) p << ", ";
+    if (i)
+      p << ", ";
     p << lbs[i] << " to " << ubs[i] << " step " << steps[i];
   }
   p << ") ";

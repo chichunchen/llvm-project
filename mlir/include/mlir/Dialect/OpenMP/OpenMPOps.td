@@ -818,11 +818,11 @@ def SimdOp : OpenMP_Op<"simd", traits = [
   let hasRegionVerifier = 1;
 }
 
-
-def YieldOp : OpenMP_Op<"yield",
-    [Pure, ReturnLike, Terminator,
-     ParentOneOf<["AtomicUpdateOp", "DeclareReductionOp", "LoopNestOp",
-                  "PrivateClauseOp", "IteratorsOp"]>]> {
+def YieldOp
+    : OpenMP_Op<"yield", [Pure, ReturnLike, Terminator,
+                          ParentOneOf<["AtomicUpdateOp", "DeclareReductionOp",
+                                       "LoopNestOp", "PrivateClauseOp",
+                                       "IteratorsOp"]>]> {
   let summary = "loop yield and termination operation";
   let description = [{
     "omp.yield" yields SSA values from the OpenMP dialect op region and
@@ -2277,17 +2277,13 @@ def DeclareSimdOp
 // Iterator modifier
 //===----------------------------------------------------------------------===//
 
-def IteratorsOp : OpenMP_Op<"iterators", [
-    AttrSizedOperandSegments,
-    SingleBlockImplicitTerminator<"YieldOp">
-  ]> {
+def IteratorsOp
+    : OpenMP_Op<"iterators", [AttrSizedOperandSegments,
+                              SingleBlockImplicitTerminator<"YieldOp">]> {
   let summary = "Iterator scope producing a set of yielded items";
 
-  let arguments = (ins
-    Variadic<Index>:$lbs,
-    Variadic<Index>:$ubs,
-    Variadic<Index>:$steps
-  );
+  let arguments = (ins Variadic<Index>:$lbs, Variadic<Index>:$ubs,
+      Variadic<Index>:$steps);
 
   // Region args are the iterator SSA values.
   let regions = (region SizedRegion<1>:$region);
@@ -2317,10 +2313,7 @@ def AffinityEntryOp : OpenMP_Op<"affinity_entry", [Pure]> {
     yielded element type of omp.iterators for affinity.
   }];
 
-  let arguments = (ins
-    OpenMP_PointerLikeType:$addr,
-    I64:$len
-  );
+  let arguments = (ins OpenMP_PointerLikeType:$addr, I64:$len);
 
   let results = (outs OpenMP_AffinityEntryType:$entry);
 
