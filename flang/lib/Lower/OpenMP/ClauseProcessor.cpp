@@ -211,10 +211,8 @@ struct IteratorRange {
 
 template <typename IteratorSpecT>
 static IteratorRange lowerIteratorRange(
-    Fortran::lower::AbstractConverter &converter,
-    const IteratorSpecT &itSpec,
-    Fortran::lower::StatementContext &stmtCtx,
-    mlir::Location loc) {
+    Fortran::lower::AbstractConverter &converter, const IteratorSpecT &itSpec,
+    Fortran::lower::StatementContext &stmtCtx, mlir::Location loc) {
   auto &builder = converter.getFirOpBuilder();
 
   const auto &ivObj = std::get<1>(itSpec.t);
@@ -233,10 +231,12 @@ static IteratorRange lowerIteratorRange(
   mlir::Value ubVal =
       fir::getBase(converter.genExprValue(toEvExpr(ubExpr), stmtCtx));
 
-  auto toIndex = [](fir::FirOpBuilder &builder, mlir::Location loc, mlir::Value v) -> mlir::Value {
+  auto toIndex = [](fir::FirOpBuilder &builder, mlir::Location loc,
+                    mlir::Value v) -> mlir::Value {
     if (v.getType().isIndex())
       return v;
-    return mlir::arith::IndexCastOp::create(builder, loc, builder.getIndexType(), v);
+    return mlir::arith::IndexCastOp::create(builder, loc,
+                                            builder.getIndexType(), v);
   };
 
   r.lb = toIndex(builder, loc, lbVal);
@@ -254,12 +254,11 @@ static IteratorRange lowerIteratorRange(
 }
 
 template <typename BuildBodyFn>
-static mlir::Value buildOmpIteratorOp(
-    Fortran::lower::AbstractConverter &converter,
-    mlir::Location loc,
-    mlir::Type iterTy,
-    llvm::ArrayRef<IteratorRange> ranges,
-    BuildBodyFn &&buildBody) {
+static mlir::Value
+buildOmpIteratorOp(Fortran::lower::AbstractConverter &converter,
+                   mlir::Location loc, mlir::Type iterTy,
+                   llvm::ArrayRef<IteratorRange> ranges,
+                   BuildBodyFn &&buildBody) {
 
   auto &builder = converter.getFirOpBuilder();
 
@@ -274,10 +273,7 @@ static mlir::Value buildOmpIteratorOp(
   }
 
   auto itOp = mlir::omp::IteratorsOp::create(
-      builder, loc,
-      iterTy,
-      mlir::ValueRange{lbs},
-      mlir::ValueRange{ubs},
+      builder, loc, iterTy, mlir::ValueRange{lbs}, mlir::ValueRange{ubs},
       mlir::ValueRange{steps});
 
   mlir::OpBuilder::InsertionGuard guard(builder);
@@ -300,11 +296,10 @@ static mlir::Value buildOmpIteratorOp(
   return itOp.getResult();
 }
 
-static mlir::Value getObjectAddr(
-    Fortran::lower::AbstractConverter &converter,
-    const omp::Object &object,
-    Fortran::lower::StatementContext &stmtCtx,
-    mlir::Location loc) {
+static mlir::Value getObjectAddr(Fortran::lower::AbstractConverter &converter,
+                                 const omp::Object &object,
+                                 Fortran::lower::StatementContext &stmtCtx,
+                                 mlir::Location loc) {
 
   if (auto expr = object.ref()) {
     fir::ExtendedValue exv =
@@ -317,12 +312,11 @@ static mlir::Value getObjectAddr(
   return converter.getSymbolAddress(*sym);
 }
 
-static mlir::Value genIteratorCoordinate(
-    Fortran::lower::AbstractConverter &converter,
-    const omp::Object &obj,
-    llvm::ArrayRef<mlir::Value> ivs,
-    Fortran::lower::StatementContext &stmtCtx,
-    mlir::Location loc) {
+static mlir::Value
+genIteratorCoordinate(Fortran::lower::AbstractConverter &converter,
+                      const omp::Object &obj, llvm::ArrayRef<mlir::Value> ivs,
+                      Fortran::lower::StatementContext &stmtCtx,
+                      mlir::Location loc) {
 
   auto &builder = converter.getFirOpBuilder();
 
@@ -347,10 +341,11 @@ static mlir::Value genIteratorCoordinate(
   return fir::CoordinateOp::create(builder, loc, eleRefTy, base, indVars);
 }
 
-static std::optional<int64_t> getElementByteSizeFromFirRef(mlir::Type addrTy,
-                                                           fir::FirOpBuilder &builder) {
+static std::optional<int64_t>
+getElementByteSizeFromFirRef(mlir::Type addrTy, fir::FirOpBuilder &builder) {
   auto refTy = mlir::dyn_cast<fir::ReferenceType>(addrTy);
-  if (!refTy) return std::nullopt;
+  if (!refTy)
+    return std::nullopt;
   mlir::Type eleTy = refTy.getEleTy();
 
   if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(eleTy))
@@ -882,7 +877,8 @@ bool ClauseProcessor::processAffinity(
         auto &context = converter.getMLIRContext();
         mlir::Location loc = converter.getCurrentLocation();
 
-        if (auto &mod = std::get<std::optional<omp::clause::Iterator>>(clause.t)) {
+        if (auto &mod =
+                std::get<std::optional<omp::clause::Iterator>>(clause.t)) {
           const auto &iters = *mod;
           llvm::SmallVector<IteratorRange> ranges;
           ranges.reserve(iters.size());
@@ -890,11 +886,11 @@ bool ClauseProcessor::processAffinity(
           for (const auto &itSpec : iters)
             ranges.push_back(
                 lowerIteratorRange(converter, itSpec, stmtCtx, loc));
-            
+
           mlir::Type i8Ty = builder.getIntegerType(8);
           mlir::Type refI8Ty = fir::ReferenceType::get(i8Ty);
-          mlir::Type entryTy =
-              mlir::omp::AffinityEntryType::get(&context, refI8Ty, builder.getI64Type());
+          mlir::Type entryTy = mlir::omp::AffinityEntryType::get(
+              &context, refI8Ty, builder.getI64Type());
           mlir::Type iterTy = mlir::omp::IteratedType::get(&context, entryTy);
           const omp::Object &obj = objects.front();
 
@@ -903,39 +899,47 @@ bool ClauseProcessor::processAffinity(
               [&](fir::FirOpBuilder &b, mlir::Location loc,
                   llvm::ArrayRef<mlir::Value> ivs) -> mlir::Value {
                 // N-D address
-                mlir::Value addr = genIteratorCoordinate(converter, obj, ivs, stmtCtx, loc);
+                mlir::Value addr =
+                    genIteratorCoordinate(converter, obj, ivs, stmtCtx, loc);
 
                 // Normalize to i8 ref for the affinity entry element type.
-                mlir::Value addrI8 = fir::ConvertOp::create(b, loc, refI8Ty, addr);
+                mlir::Value addrI8 =
+                    fir::ConvertOp::create(b, loc, refI8Ty, addr);
 
-                auto elemBytes = getElementByteSizeFromFirRef(addr.getType(), b);
-                assert(elemBytes && "unsupported element type for affinity size");
+                auto elemBytes =
+                    getElementByteSizeFromFirRef(addr.getType(), b);
+                assert(elemBytes &&
+                       "unsupported element type for affinity size");
 
                 mlir::Value len = mlir::arith::ConstantOp::create(
                     b, loc, b.getI64Type(), b.getI64IntegerAttr(*elemBytes));
 
-                auto entry = mlir::omp::AffinityEntryOp::create(b, loc, entryTy, addrI8, len);
+                auto entry = mlir::omp::AffinityEntryOp::create(b, loc, entryTy,
+                                                                addrI8, len);
                 return entry.getResult();
               });
           result.iterated.push_back(iterHandle);
           result.iterated.back().dump();
         }
-        
+
         if (!objects.empty()) {
           mlir::Type i8Ty = builder.getIntegerType(8);
           mlir::Type refI8Ty = fir::ReferenceType::get(i8Ty);
-          mlir::Type entryTy =
-            mlir::omp::AffinityEntryType::get(&context, refI8Ty, builder.getI64Type());
-          
+          mlir::Type entryTy = mlir::omp::AffinityEntryType::get(
+              &context, refI8Ty, builder.getI64Type());
+
           for (auto object : objects) {
-            mlir::Value objAddr = getObjectAddr(converter, object, stmtCtx, loc);
-            auto elemBytes = getElementByteSizeFromFirRef(objAddr.getType(), builder);
+            mlir::Value objAddr =
+                getObjectAddr(converter, object, stmtCtx, loc);
+            auto elemBytes =
+                getElementByteSizeFromFirRef(objAddr.getType(), builder);
 
             mlir::Value len = mlir::arith::ConstantOp::create(
-            builder, loc, builder.getI64Type(),
-            builder.getI64IntegerAttr(*elemBytes));
+                builder, loc, builder.getI64Type(),
+                builder.getI64IntegerAttr(*elemBytes));
 
-            mlir::Value addrI8 = fir::ConvertOp::create(builder, loc, refI8Ty, objAddr);
+            mlir::Value addrI8 =
+                fir::ConvertOp::create(builder, loc, refI8Ty, objAddr);
 
             mlir::Value entry = mlir::omp::AffinityEntryOp::create(
                 builder, loc, entryTy, addrI8, len);
