@@ -282,11 +282,10 @@ static IteratorRange lowerIteratorRange(
 }
 
 template <typename BuildBodyFn>
-static mlir::Value
-buildOmpIteratorOp(Fortran::lower::AbstractConverter &converter,
-                   mlir::Location loc, mlir::Type iterTy,
-                   llvm::ArrayRef<IteratorRange> ranges,
-                   BuildBodyFn &&buildBody) {
+static mlir::Value buildIteratorOp(Fortran::lower::AbstractConverter &converter,
+                                   mlir::Location loc, mlir::Type iterTy,
+                                   llvm::ArrayRef<IteratorRange> ranges,
+                                   BuildBodyFn &&buildBody) {
 
   auto &builder = converter.getFirOpBuilder();
 
@@ -914,6 +913,16 @@ bool ClauseProcessor::processAffinity(
         // Iterated affinity entry type: !omp.iterated<entryTy>
         mlir::Type iterTy = mlir::omp::IteratedType::get(&context, entryTy);
 
+        auto makeAffinityEntry = [&](fir::FirOpBuilder &b, mlir::Location l,
+                                     mlir::Value addr,
+                                     int64_t elemBytes) -> mlir::Value {
+          mlir::Value addrI8 = fir::ConvertOp::create(b, l, refI8Ty, addr);
+          mlir::Value len = mlir::arith::ConstantOp::create(
+              b, l, b.getI64Type(), b.getI64IntegerAttr(elemBytes));
+          return mlir::omp::AffinityEntryOp::create(b, l, entryTy, addrI8, len)
+              .getResult();
+        };
+
         llvm::SmallVector<IteratorRange> iteratorRanges;
         llvm::SmallPtrSet<const Fortran::semantics::Symbol *, 4> ivSyms;
 
@@ -934,42 +943,27 @@ bool ClauseProcessor::processAffinity(
         for (const omp::Object &object : objects) {
           if (iteratorModifier.has_value() &&
               objectMentionsAnyIV(object, ivSyms)) {
-            mlir::Value iterHandle = buildOmpIteratorOp(
+            mlir::Value iterHandle = buildIteratorOp(
                 converter, loc, iterTy, iteratorRanges,
                 [&](fir::FirOpBuilder &builder, mlir::Location loc,
                     llvm::ArrayRef<mlir::Value> ivs) -> mlir::Value {
                   mlir::Value addr = genIteratorCoordinate(converter, object,
                                                            ivs, stmtCtx, loc);
-                  mlir::Value addrI8 =
-                      fir::ConvertOp::create(builder, loc, refI8Ty, addr);
                   auto elemBytes =
                       getElementByteSizeFromFirRef(addr.getType(), builder);
                   assert(elemBytes &&
                          "unsupported element type for affinity size");
-
-                  mlir::Value len = mlir::arith::ConstantOp::create(
-                      builder, loc, builder.getI64Type(),
-                      builder.getI64IntegerAttr(*elemBytes));
-                  auto entry = mlir::omp::AffinityEntryOp::create(
-                      builder, loc, entryTy, addrI8, len);
-                  return entry.getResult();
+                  return makeAffinityEntry(builder, loc, addr, *elemBytes);
                 });
 
             result.iterated.push_back(iterHandle);
           } else {
             mlir::Value addr = getObjectAddr(converter, object, stmtCtx, loc);
-            mlir::Value addrI8 =
-                fir::ConvertOp::create(builder, loc, refI8Ty, addr);
             auto elemBytes =
-                getElementByteSizeFromFirRef(addr.getType(), builder);
+                getStaticByteSizeFromFirRef(addr.getType(), builder);
             assert(elemBytes && "unsupported element type for affinity size");
-
-            mlir::Value len = mlir::arith::ConstantOp::create(
-                builder, loc, builder.getI64Type(),
-                builder.getI64IntegerAttr(*elemBytes));
-            mlir::Value entry = mlir::omp::AffinityEntryOp::create(
-                builder, loc, entryTy, addrI8, len);
-            result.affinityVars.push_back(entry);
+            result.affinityVars.push_back(
+                makeAffinityEntry(builder, loc, addr, *elemBytes));
           }
         }
 

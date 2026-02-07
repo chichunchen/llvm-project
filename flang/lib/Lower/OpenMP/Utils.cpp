@@ -916,6 +916,40 @@ void collectLoopRelatedInfo(
   convertLoopBounds(converter, currentLocation, result, loopVarTypeSize);
 }
 
+std::optional<int64_t> getStaticNumElements(fir::SequenceType seqTy) {
+  int64_t total = 1;
+  for (int64_t d : seqTy.getShape()) {
+    if (d < 0)
+      return std::nullopt; // dynamic extent
+    total *= d;
+  }
+  return total;
+}
+
+std::optional<int64_t> getStaticByteSizeFromFirRef(mlir::Type addrTy,
+                                                   fir::FirOpBuilder &builder) {
+  auto refTy = mlir::dyn_cast<fir::ReferenceType>(addrTy);
+  if (!refTy)
+    return std::nullopt;
+
+  mlir::Type eleTy = refTy.getEleTy();
+
+  if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(eleTy)) {
+    auto numElems = getStaticNumElements(seqTy);
+    if (!numElems)
+      return std::nullopt;
+
+    auto elemSize = builder.getDataLayout().getTypeSize(seqTy.getEleTy());
+    return (*numElems) * elemSize;
+  }
+
+  if (eleTy.isIntOrFloat()) {
+    return builder.getDataLayout().getTypeSize(eleTy);
+  }
+
+  return std::nullopt;
+}
+
 } // namespace omp
 } // namespace lower
 } // namespace Fortran
