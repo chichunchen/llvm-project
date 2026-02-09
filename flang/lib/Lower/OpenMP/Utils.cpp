@@ -982,6 +982,23 @@ mlir::Value genIteratorCoordinate(Fortran::lower::AbstractConverter &converter,
   return fir::CoordinateOp::create(builder, loc, eleRefTy, base, subsI32);
 }
 
+bool hasIVReference(
+    const omp::Object &object,
+    const llvm::SmallPtrSetImpl<const Fortran::semantics::Symbol *> &ivSyms) {
+  auto ref = object.ref();
+  if (!ref)
+    return false;
+
+  Fortran::lower::SomeExpr expr = toEvExpr(*ref);
+
+  for (Fortran::evaluate::SymbolRef s : CollectSymbols(expr)) {
+    const Fortran::semantics::Symbol &ult = s->GetUltimate();
+    if (ivSyms.contains(&ult))
+      return true;
+  }
+  return false;
+}
+
 } // namespace omp
 } // namespace lower
 } // namespace Fortran

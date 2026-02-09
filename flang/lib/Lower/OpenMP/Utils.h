@@ -187,6 +187,10 @@ void collectTileSizesFromOpenMPConstruct(
     llvm::SmallVectorImpl<int64_t> &tileSizes,
     Fortran::semantics::SemanticsContext &semaCtx);
 
+bool hasIVReference(
+    const omp::Object &object,
+    const llvm::SmallPtrSetImpl<const Fortran::semantics::Symbol *> &ivSyms);
+
 mlir::Value genIteratorCoordinate(Fortran::lower::AbstractConverter &converter,
                                   mlir::Value base,
                                   llvm::ArrayRef<mlir::Value> ivs,
