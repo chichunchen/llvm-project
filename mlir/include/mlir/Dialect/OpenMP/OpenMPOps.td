@@ -2313,12 +2313,18 @@ def AffinityEntryOp : OpenMP_Op<"affinity_entry", [Pure]> {
     yielded element type of omp.iterators for affinity.
   }];
 
-  let arguments = (ins OpenMP_PointerLikeType:$addr, I64:$len);
+  let arguments = (ins OpenMP_PointerLikeType:$addr,
+      Variadic<OpenMP_MapBoundsType>:$bounds);
 
   let results = (outs OpenMP_AffinityEntryType:$entry);
 
+  // let assemblyFormat = [{
+  //   $addr `,` $len `:` `(` type($addr) `,` type($len) `)` `->`
+  //   qualified(type($entry)) attr-dict
+  // }];
   let assemblyFormat = [{
-    $addr `,` $len `:` `(` type($addr) `,` type($len) `)` `->` qualified(type($entry)) attr-dict
+    $addr (`,` $bounds^)? `:` `(` type($addr)
+      (`,` type($bounds)^)? `)` `->` qualified(type($entry)) attr-dict
   }];
 }
 

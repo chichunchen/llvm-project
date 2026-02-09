@@ -187,8 +187,10 @@ void collectTileSizesFromOpenMPConstruct(
     llvm::SmallVectorImpl<int64_t> &tileSizes,
     Fortran::semantics::SemanticsContext &semaCtx);
 
-std::optional<int64_t> getStaticObjectByteSizeFromFirRef(mlir::Type addrTy,
-                                                         fir::FirOpBuilder &builder);
+mlir::Value genIteratorCoordinate(Fortran::lower::AbstractConverter &converter,
+                                  mlir::Value base,
+                                  llvm::ArrayRef<mlir::Value> ivs,
+                                  mlir::Location loc);
 
 } // namespace omp
 } // namespace lower

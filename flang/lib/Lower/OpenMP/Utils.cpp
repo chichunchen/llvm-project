@@ -916,29 +916,70 @@ void collectLoopRelatedInfo(
   convertLoopBounds(converter, currentLocation, result, loopVarTypeSize);
 }
 
-std::optional<int64_t>
-getStaticObjectByteSizeFromFirRef(mlir::Type addrTy, fir::FirOpBuilder &b) {
-  auto refTy = mlir::dyn_cast<fir::ReferenceType>(addrTy);
-  if (!refTy) return std::nullopt;
+mlir::Value genIteratorCoordinate(Fortran::lower::AbstractConverter &converter,
+                                  mlir::Value base,
+                                  llvm::ArrayRef<mlir::Value> ivs,
+                                  mlir::Location loc) {
+  auto &builder = converter.getFirOpBuilder();
+  mlir::Type baseTy = base.getType();
 
-  mlir::Type eleTy = refTy.getEleTy();
-  const auto &dl = b.getDataLayout();
-
-  // If ref to array, compute total bytes if shape is static.
-  if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(eleTy)) {
-    int64_t elems = 1;
-    for (int64_t d : seqTy.getShape()) {
-      if (d < 0) return std::nullopt; // dynamic extent
-      elems *= d;
+  // If base is a reference-to-box, load it to get the box value.
+  if (auto refTy = mlir::dyn_cast<fir::ReferenceType>(baseTy)) {
+    if (auto innerBoxTy = mlir::dyn_cast<fir::BoxType>(refTy.getEleTy())) {
+      base = fir::LoadOp::create(builder, loc, innerBoxTy, base);
+      baseTy = base.getType();
     }
-    return elems * static_cast<int64_t>(dl.getTypeSize(seqTy.getEleTy()));
   }
 
-  // If ref to scalar int/float, return its size.
-  if (eleTy.isIntOrFloat())
-    return static_cast<int64_t>(dl.getTypeSize(eleTy));
+  // descriptor-backed arrays (assumed-shape dummies etc.)
+  if (auto boxTy = mlir::dyn_cast<fir::BoxType>(baseTy)) {
+    // Build !fir.shape<rank> from descriptor extents.
+    const unsigned rank = ivs.size();
+    llvm::SmallVector<mlir::Value> extents;
+    extents.reserve(rank);
 
-  return std::nullopt;
+    for (unsigned d = 0; d < rank; ++d) {
+      mlir::Value dim = builder.createIntegerConstant(loc, builder.getI32Type(),
+                                                      static_cast<int64_t>(d));
+      auto dims = fir::BoxDimsOp::create(builder, loc,
+                                         /*lbType=*/builder.getIndexType(),
+                                         /*extentType=*/builder.getIndexType(),
+                                         /*strideType=*/builder.getIndexType(),
+                                         base, dim);
+      extents.push_back(dims.getExtent());
+    }
+
+    mlir::Value shape = fir::ShapeOp::create(builder, loc, extents);
+
+    // Result element reference type.
+    mlir::Type boxedEleTy = boxTy.getEleTy(); // e.g. !fir.array<?x?xi32>
+    if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(boxedEleTy))
+      boxedEleTy = seqTy.getEleTy();
+    mlir::Type eleRefTy = fir::ReferenceType::get(boxedEleTy);
+
+    return fir::ArrayCoorOp::create(builder, loc, eleRefTy,
+                                    /*memref=*/base,
+                                    /*shape=*/shape,
+                                    /*slice=*/mlir::Value{},
+                                    /*indices=*/mlir::ValueRange{ivs},
+                                    /*typeparams=*/mlir::ValueRange{});
+  }
+
+  // explicit-shape arrays lowered as !fir.ref<!fir.array<...>>
+  // base must be a reference to a SequenceType.
+  auto baseRefTy = mlir::cast<fir::ReferenceType>(baseTy);
+  auto seqTy = mlir::cast<fir::SequenceType>(baseRefTy.getEleTy());
+  mlir::Type eleRefTy = fir::ReferenceType::get(seqTy.getEleTy());
+
+  // coordinate_of expects i32 subscripts.
+  llvm::SmallVector<mlir::Value> subsI32;
+  subsI32.reserve(ivs.size());
+  for (mlir::Value iv : ivs) {
+    subsI32.push_back(mlir::arith::IndexCastOp::create(
+        builder, loc, builder.getI32Type(), iv));
+  }
+
+  return fir::CoordinateOp::create(builder, loc, eleRefTy, base, subsI32);
 }
 
 } // namespace omp
