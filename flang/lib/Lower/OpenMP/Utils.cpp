@@ -916,36 +916,27 @@ void collectLoopRelatedInfo(
   convertLoopBounds(converter, currentLocation, result, loopVarTypeSize);
 }
 
-std::optional<int64_t> getStaticNumElements(fir::SequenceType seqTy) {
-  int64_t total = 1;
-  for (int64_t d : seqTy.getShape()) {
-    if (d < 0)
-      return std::nullopt; // dynamic extent
-    total *= d;
-  }
-  return total;
-}
-
-std::optional<int64_t> getStaticByteSizeFromFirRef(mlir::Type addrTy,
-                                                   fir::FirOpBuilder &builder) {
+std::optional<int64_t>
+getStaticObjectByteSizeFromFirRef(mlir::Type addrTy, fir::FirOpBuilder &b) {
   auto refTy = mlir::dyn_cast<fir::ReferenceType>(addrTy);
-  if (!refTy)
-    return std::nullopt;
+  if (!refTy) return std::nullopt;
 
   mlir::Type eleTy = refTy.getEleTy();
+  const auto &dl = b.getDataLayout();
 
+  // If ref to array, compute total bytes if shape is static.
   if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(eleTy)) {
-    auto numElems = getStaticNumElements(seqTy);
-    if (!numElems)
-      return std::nullopt;
-
-    auto elemSize = builder.getDataLayout().getTypeSize(seqTy.getEleTy());
-    return (*numElems) * elemSize;
+    int64_t elems = 1;
+    for (int64_t d : seqTy.getShape()) {
+      if (d < 0) return std::nullopt; // dynamic extent
+      elems *= d;
+    }
+    return elems * static_cast<int64_t>(dl.getTypeSize(seqTy.getEleTy()));
   }
 
-  if (eleTy.isIntOrFloat()) {
-    return builder.getDataLayout().getTypeSize(eleTy);
-  }
+  // If ref to scalar int/float, return its size.
+  if (eleTy.isIntOrFloat())
+    return static_cast<int64_t>(dl.getTypeSize(eleTy));
 
   return std::nullopt;
 }
