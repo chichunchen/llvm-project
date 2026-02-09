@@ -38,6 +38,24 @@ def OpenMP_MapBoundsType : OpenMP_Type<"MapBounds", "map_bounds_ty"> {
   let summary = "Type for representing omp map clause bounds information";
 }
 
+def OpenMP_IteratedType : OpenMP_Type<"Iterated", "iterated"> {
+  let summary = "OpenMP iterator-produced list handle";
+  let description = [{
+    Represents a runtime-sized list of elements of a given element type,
+    produced via an OpenMP iterator modifier template.
+  }];
+
+  let parameters = (ins "Type":$elementType);
+  let assemblyFormat = "`<` $elementType `>`";
+}
+
+def OpenMP_AffinityEntryType : OpenMP_Type<"AffinityEntry", "affinity_entry"> {
+  let summary = "Type for representing omp affinity clause locator information";
+
+  let parameters = (ins "Type":$addrType, "Type":$boundsType);
+  let assemblyFormat = "`<` $addrType `,` $boundsType `>`";
+}
+
 //===---------------------------------------------------------------------===//
 // OpenMP Canonical Loop Info Type
 //===---------------------------------------------------------------------===//
@@ -279,33 +297,5 @@ class OpenMPTransformBase_Op<string mnemonic,
                          # clausesAssemblyFormat
                          # [{ attr-dict }];
 }
-
-def OpenMP_IteratedType : OpenMP_Type<"Iterated", "iterated"> {
-  let summary = "OpenMP iterator-produced list handle";
-  let description = [{
-    Represents a runtime-sized list of elements of a given element type,
-    produced via an OpenMP iterator modifier template.
-  }];
-
-  let parameters = (ins "Type":$elementType);
-  let assemblyFormat = "`<` $elementType `>`";
-}
-
-def OpenMP_AffinityEntryType : OpenMP_Type<"AffinityEntry", "affinity_entry"> {
-  let summary = "OpenMP task affinity locator entry";
-  let description = [{
-    A structured affinity locator entry. This is the element type to be used
-    for affinity lists and for omp.iterated<...> produced by iterator modifiers.
-    It contains the base address and the byte length of the referenced memory.
-  }];
-
-  // addr: pointer-like (opaque llvm.ptr in your current pipeline)
-  // len:  integer byte size (use i64 to match common libomp ABI expectations)
-  let parameters = (ins "Type":$addrType, "Type":$lenType);
-  let assemblyFormat = "`<` $addrType `,` $lenType `>`";
-}
-
-def OpenMP_AffinityItemType
-    : AnyTypeOf<[OpenMP_AffinityEntryType, OpenMP_PointerLikeType]>;
 
 #endif  // OPENMP_OP_BASE

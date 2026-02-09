@@ -2280,19 +2280,29 @@ def DeclareSimdOp
 def IteratorsOp
     : OpenMP_Op<"iterators", [AttrSizedOperandSegments,
                               SingleBlockImplicitTerminator<"YieldOp">]> {
-  let summary = "Iterator scope producing a set of yielded items";
+  let summary = "Iterator modifier";
+  let description = [{
+    The result of `omp.iterators` is an abstract handle of type
+    `!omp.iterated<T>`, representing the list of yielded values. This handle
+    can be directly consumed by OpenMP clauses that accept iterator modifiers,
+    such as `affinity`, `map`, `to`, `from`, or `depend`.
+
+    Example (iterator modifier on an affinity clause):
+      %it = omp.iterators(%i, %j) =
+        (%lb_i to %ub_i step %st_i, %lb_j to %ub_j step %st_j) {
+        %addr = …  // compute per-iteration affinity locator
+        omp.yield(%addr)
+      } -> !omp.iterated<!omp.affinity_entry<…>>
+
+      omp.task affinity(%it) { … }
+  }];
 
   let arguments = (ins Variadic<Index>:$lbs, Variadic<Index>:$ubs,
       Variadic<Index>:$steps);
 
-  // Region args are the iterator SSA values.
   let regions = (region SizedRegion<1>:$region);
 
   let results = (outs OpenMP_IteratedType:$iterated);
-
-  let extraClassDeclaration = [{
-    unsigned getNumIters() { return getLbs().size(); }
-  }];
 
   let assemblyFormat = [{
     `(` custom<IteratorsHeader>($region,
@@ -2306,12 +2316,7 @@ def IteratorsOp
 }
 
 def AffinityEntryOp : OpenMP_Op<"affinity_entry", [Pure]> {
-  let summary = "Create an OpenMP affinity entry value";
-  let description = [{
-    Materializes a structured affinity entry from an address and a byte length.
-    The resulting value can be used directly in affinity clauses or as the
-    yielded element type of omp.iterators for affinity.
-  }];
+  let summary = "OpenMP affinity clause entry value";
 
   let arguments = (ins OpenMP_PointerLikeType:$addr,
       Variadic<OpenMP_MapBoundsType>:$bounds);

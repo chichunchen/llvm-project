@@ -33,7 +33,7 @@ class OpenMP_AffinityClauseSkip<
     : OpenMP_Clause<traits, arguments, assemblyFormat, description,
                     extraClassDeclaration> {
   let arguments = (ins Variadic<OpenMP_IteratedType>:$iterated,
-      Variadic<OpenMP_AffinityItemType>:$affinity_vars);
+      Variadic<OpenMP_AffinityEntryType>:$affinity_vars);
 
   let optAssemblyFormat = [{
     `affinity` `(` custom<AffinityClause>($iterated, $affinity_vars,
