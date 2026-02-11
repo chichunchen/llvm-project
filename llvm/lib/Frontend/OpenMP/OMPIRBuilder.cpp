@@ -2430,7 +2430,8 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTaskloop(
 OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTask(
     const LocationDescription &Loc, InsertPointTy AllocaIP,
     BodyGenCallbackTy BodyGenCB, bool Tied, Value *Final, Value *IfCondition,
-    SmallVector<DependData> Dependencies, bool Mergeable, Value *EventHandle,
+    SmallVector<DependData> Dependencies, AffinityData Affinity,
+    bool Mergeable, Value *EventHandle,
     Value *Priority) {
 
   if (!updateToLocation(Loc))
@@ -2476,7 +2477,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTask(
   OI.ExcludeArgsFromAggregate.push_back(createFakeIntVal(
       Builder, AllocaIP, ToBeDeleted, TaskAllocaIP, "global.tid", false));
 
-  OI.PostOutlineCB = [this, Ident, Tied, Final, IfCondition, Dependencies,
+  OI.PostOutlineCB = [this, Ident, Tied, Final, IfCondition, Dependencies, Affinity,
                       Mergeable, Priority, EventHandle, TaskAllocaBB,
                       ToBeDeleted](Function &OutlinedFn) mutable {
     // Replace the Stale CI by appropriate RTL function call.
@@ -2551,6 +2552,25 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTask(
         TaskAllocFn, {/*loc_ref=*/Ident, /*gtid=*/ThreadID, /*flags=*/Flags,
                       /*sizeof_task=*/TaskSize, /*sizeof_shared=*/SharedsSize,
                       /*task_func=*/&OutlinedFn});
+
+    if (Affinity.AffinityArray && Affinity.AffinityCount) {
+      Function *RegAffFn =
+        getOrCreateRuntimeFunctionPtr(OMPRTL___kmpc_omp_reg_task_with_affinity);
+      Value *AffinityArray = Affinity.AffinityArray;
+      Value *AffinityCount = Affinity.AffinityCount;
+
+      // bitcast to i8*
+      Value *AffPtr = Builder.CreatePointerBitCastOrAddrSpaceCast(
+          AffinityArray, Builder.getPtrTy(0));
+
+      if (!AffinityCount->getType()->isIntegerTy(32))
+        AffinityCount =
+            Builder.CreateTruncOrBitCast(AffinityCount, Builder.getInt32Ty());
+
+      CallInst *RegAffCall = createRuntimeFunctionCall(RegAffFn,
+                                {Ident, ThreadID, TaskData, AffinityCount, AffPtr});
+      RegAffCall->dump();
+    }
 
     // Emit detach clause initialization.
     // evt = (typeof(evt))__kmpc_task_allow_completion_event(loc, tid,

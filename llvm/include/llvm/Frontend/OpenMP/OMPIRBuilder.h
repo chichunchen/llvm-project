@@ -1457,6 +1457,11 @@ public:
         : DepKind(DepKind), DepValueType(DepValueType), DepVal(DepVal) {}
   };
 
+  struct AffinityData {
+    Value *AffinityCount;
+    Value *AffinityArray;
+  };
+
   /// Generator for `#omp taskloop`
   ///
   /// \param Loc The location where the taskloop construct was encountered.
@@ -1524,7 +1529,8 @@ public:
   createTask(const LocationDescription &Loc, InsertPointTy AllocaIP,
              BodyGenCallbackTy BodyGenCB, bool Tied = true,
              Value *Final = nullptr, Value *IfCondition = nullptr,
-             SmallVector<DependData> Dependencies = {}, bool Mergeable = false,
+             SmallVector<DependData> Dependencies = {},
+             AffinityData Affinity = {}, bool Mergeable = false,
              Value *EventHandle = nullptr, Value *Priority = nullptr);
 
   /// Generator for the taskgroup construct

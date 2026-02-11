@@ -2297,8 +2297,8 @@ def IteratorsOp
       omp.task affinity(%it) { … }
   }];
 
-  let arguments = (ins Variadic<Index>:$lbs, Variadic<Index>:$ubs,
-      Variadic<Index>:$steps);
+  let arguments = (ins Variadic<IntLikeType>:$lbs, Variadic<IntLikeType>:$ubs,
+      Variadic<IntLikeType>:$steps);
 
   let regions = (region SizedRegion<1>:$region);
 
@@ -2318,19 +2318,18 @@ def IteratorsOp
 def AffinityEntryOp : OpenMP_Op<"affinity_entry", [Pure]> {
   let summary = "OpenMP affinity clause entry value";
 
-  let arguments = (ins OpenMP_PointerLikeType:$addr,
-      Variadic<OpenMP_MapBoundsType>:$bounds);
+  let arguments = (ins OpenMP_PointerLikeType:$addr, IntLikeType:$len);
 
   let results = (outs OpenMP_AffinityEntryType:$entry);
 
-  // let assemblyFormat = [{
-  //   $addr `,` $len `:` `(` type($addr) `,` type($len) `)` `->`
-  //   qualified(type($entry)) attr-dict
-  // }];
   let assemblyFormat = [{
-    $addr (`,` $bounds^)? `:` `(` type($addr)
-      (`,` type($bounds)^)? `)` `->` qualified(type($entry)) attr-dict
+    $addr `,` $len `:` `(` type($addr) `,` type($len) `)` `->`
+    qualified(type($entry)) attr-dict
   }];
+  // let assemblyFormat = [{
+  //   $addr (`,` $bounds^)? `:` `(` type($addr)
+  //     (`,` type($bounds)^)? `)` `->` qualified(type($entry)) attr-dict
+  // }];
 }
 
 #endif // OPENMP_OPS

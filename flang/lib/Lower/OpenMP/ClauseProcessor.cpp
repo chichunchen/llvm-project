@@ -813,14 +813,10 @@ bool ClauseProcessor::processAffinity(
         auto &context = converter.getMLIRContext();
         mlir::Location clauseLocation = converter.getCurrentLocation();
 
-        mlir::Type i8Ty = builder.getIntegerType(8);
-        mlir::Type refI8Ty = fir::ReferenceType::get(i8Ty);
-        mlir::Type locatorEntryTy = mlir::omp::AffinityEntryType::get(
-            &context, refI8Ty, mlir::omp::MapBoundsType::get(&context));
-        mlir::Type iterEntryTy = mlir::omp::AffinityEntryType::get(
-            &context, refI8Ty, mlir::NoneType::get(&context));
-        mlir::Type iteratedTy =
-            mlir::omp::IteratedType::get(&context, iterEntryTy);
+        mlir::Type refI8Ty = fir::ReferenceType::get(builder.getIntegerType(8));
+        mlir::Type entryTy = mlir::omp::AffinityEntryType::get(
+            &context, refI8Ty, builder.getI64Type());
+        mlir::Type iterTy = mlir::omp::IteratedType::get(&context, entryTy);
 
         auto normalizeAddr = [](fir::FirOpBuilder &b, mlir::Location l,
                                 mlir::Type addrTy,
@@ -853,10 +849,10 @@ bool ClauseProcessor::processAffinity(
         auto makeAffinityEntry =
             [&](fir::FirOpBuilder &b, mlir::Location l, mlir::Type entryTy,
                 mlir::Value addr,
-                llvm::ArrayRef<mlir::Value> bounds) -> mlir::Value {
+                mlir::Value len) -> mlir::Value {
           mlir::Value addrI8 = normalizeAddr(b, l, refI8Ty, addr);
           return mlir::omp::AffinityEntryOp::create(b, l, entryTy, addrI8,
-                                                    bounds)
+                                                    len)
               .getResult();
         };
 
@@ -882,7 +878,7 @@ bool ClauseProcessor::processAffinity(
           std::stringstream asFortran;
           if (iteratorModifier.has_value() && hasIVReference(object, ivSyms)) {
             mlir::Value iterHandle = buildIteratorOp(
-                converter, clauseLocation, iteratedTy, iteratorRanges,
+                converter, clauseLocation, iterTy, iteratorRanges,
                 [&](fir::FirOpBuilder &builder, mlir::Location loc,
                     llvm::ArrayRef<mlir::Value> ivs) -> mlir::Value {
                   const Fortran::semantics::Symbol *sym = object.sym();
@@ -893,9 +889,12 @@ bool ClauseProcessor::processAffinity(
                           /*unwrapFirBox=*/false);
                   mlir::Value addr =
                       genIteratorCoordinate(converter, info.addr, ivs, loc);
-                  assert(bounds.empty() && "expected no bounds from iterator");
-                  return makeAffinityEntry(builder, loc, iterEntryTy, addr,
-                                           bounds);
+                  // Length of iterator-based affinity entry set as element size
+                  int64_t elemBytes = getStaticObjectSize(addr.getType(), builder.getDataLayout());
+                  mlir::Value len = mlir::arith::ConstantOp::create(
+                    builder, loc, builder.getI64Type(), builder.getI64IntegerAttr(elemBytes));
+                  return makeAffinityEntry(builder, loc, entryTy, addr,
+                                           len);
                 });
 
             result.iterated.push_back(iterHandle);
@@ -906,8 +905,12 @@ bool ClauseProcessor::processAffinity(
                     converter, builder, semaCtx, stmtCtx, *object.sym(),
                     object.ref(), clauseLocation, asFortran, bounds,
                     treatIndexAsSection);
+            // TODO might need to compute the length based on bounds, use element size for now as a placeholder
+            int64_t elemBytes = getStaticObjectSize(info.addr.getType(), builder.getDataLayout());
+            mlir::Value len = mlir::arith::ConstantOp::create(
+              builder, clauseLocation, builder.getI64Type(), builder.getI64IntegerAttr(elemBytes));
             result.affinityVars.push_back(makeAffinityEntry(
-                builder, clauseLocation, locatorEntryTy, info.addr, bounds));
+                builder, clauseLocation, entryTy, info.addr, len));
           }
         }
 

@@ -413,7 +413,7 @@ static LogicalResult checkImplementationStatus(Operation &op) {
         checkThreadLimit(op, result);
       })
       .Case([&](omp::TaskOp op) {
-        checkAffinity(op, result);
+        // checkAffinity(op, result);
         checkAllocate(op, result);
         checkInReduction(op, result);
       })
@@ -2308,11 +2308,95 @@ void TaskContextStructManager::freeStructPtr() {
   builder.CreateFree(structPtr);
 }
 
+static LogicalResult buildTaskAffinityList(mlir::omp::TaskOp taskOp,
+                                          llvm::IRBuilderBase &builder,
+                                          LLVM::ModuleTranslation &moduleTranslation,
+                                          llvm::OpenMPIRBuilder::AffinityData &AD) {
+  if (taskOp.getAffinityVars().empty() && taskOp.getIterated().empty()) {
+    return success();
+  }
+
+  auto &ctx = builder.getContext();
+  llvm::StructType *kmpTaskAffinityInfoTy = llvm::StructType::get(llvm::Type::getInt64Ty(ctx),
+                                            llvm::Type::getInt64Ty(ctx),
+                                            llvm::Type::getInt32Ty(ctx));
+
+  // Placeholder for iterator path (not supported yet):
+  // If you later add taskOp.getIterated() you can handle it here.
+  // For now: ignore iterated and only use plain affinity_vars.
+  SmallVector<mlir::Value> affinityItems(taskOp.getAffinityVars().begin(),
+                                        taskOp.getAffinityVars().end());
+
+  if (affinityItems.empty()) {
+    AD.AffinityArray = llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(ctx));
+    AD.AffinityCount = builder.getInt32(0);
+    return success();
+  }
+
+  // Allocate [N x kmp_task_affinity_info_t] on the stack as `affTy*`.
+  llvm::Value *count64 =
+      llvm::ConstantInt::get(builder.getInt64Ty(), affinityItems.size());
+  llvm::AllocaInst *arr = builder.CreateAlloca(kmpTaskAffinityInfoTy, count64, "omp.affinity_list");
+
+  for (unsigned i = 0; i < affinityItems.size(); ++i) {
+    auto *defOp = affinityItems[i].getDefiningOp();
+    assert(defOp && "affinity item must be defined by an op");
+
+    auto entryOp = mlir::dyn_cast<mlir::omp::AffinityEntryOp>(defOp);
+    if (!entryOp)
+      return taskOp.emitOpError()
+             << "only omp.affinity_entry is supported as an affinity item (for now)";
+
+    // addr operand (not the affinity_entry result)
+    llvm::Value *addr = moduleTranslation.lookupValue(entryOp.getAddr());
+    if (!addr)
+      return entryOp.emitOpError() << "missing LLVM value for affinity addr";
+
+    // base_addr = ptrtoint(addr) -> i64
+    llvm::Value *baseAddr = builder.CreatePtrToInt(addr, builder.getInt64Ty());
+
+    // len must exist for locator-only lowering (option A/B)
+    llvm::Value *len = nullptr;
+    if (entryOp.getLen()) {
+      len = moduleTranslation.lookupValue(entryOp.getLen());
+      if (!len)
+        return entryOp.emitOpError() << "missing LLVM value for affinity len";
+      if (len->getType() != builder.getInt64Ty())
+        len = builder.CreateZExtOrTrunc(len, builder.getInt64Ty());
+    } else {
+      return entryOp.emitOpError()
+             << "affinity_entry must carry a byte length for locator-only lowering";
+    }
+
+    llvm::Value *flags = builder.getInt32(0);
+
+    // FIX: arr is affTy*, index element i with a single index.
+    llvm::Value *entry = builder.CreateInBoundsGEP(
+        kmpTaskAffinityInfoTy, arr, builder.getInt64(i), "omp.affinity.entry");
+
+    // store fields into entry
+    llvm::Value *gep0 = builder.CreateStructGEP(kmpTaskAffinityInfoTy, entry, 0); // base_addr
+    llvm::Value *gep1 = builder.CreateStructGEP(kmpTaskAffinityInfoTy, entry, 1); // len
+    llvm::Value *gep2 = builder.CreateStructGEP(kmpTaskAffinityInfoTy, entry, 2); // flags (i32)
+    builder.CreateStore(baseAddr, gep0);
+    builder.CreateStore(len, gep1);
+    builder.CreateStore(flags, gep2);
+    entry->dump();
+  }
+
+  AD.AffinityArray = arr;
+  AD.AffinityArray->dump();
+  AD.AffinityCount = builder.getInt32(static_cast<uint32_t>(affinityItems.size()));
+  AD.AffinityCount->dump();
+  return success();
+}
+
 /// Converts an OpenMP task construct into LLVM IR using OpenMPIRBuilder.
 static LogicalResult
 convertOmpTaskOp(omp::TaskOp taskOp, llvm::IRBuilderBase &builder,
                  LLVM::ModuleTranslation &moduleTranslation) {
   using InsertPointTy = llvm::OpenMPIRBuilder::InsertPointTy;
+  llvm::errs() << "convertOmpTaskOp: " << taskOp << "\n";
   if (failed(checkImplementationStatus(*taskOp)))
     return failure();
 
@@ -2519,6 +2603,11 @@ convertOmpTaskOp(omp::TaskOp taskOp, llvm::IRBuilderBase &builder,
   SmallVector<llvm::OpenMPIRBuilder::DependData> dds;
   buildDependData(taskOp.getDependKinds(), taskOp.getDependVars(),
                   moduleTranslation, dds);
+  
+  llvm::errs() << "AffinityData:\n";
+  llvm::OpenMPIRBuilder::AffinityData affinityData;
+  if (failed(buildTaskAffinityList(taskOp, builder, moduleTranslation, affinityData)))
+    return failure();
 
   llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
   llvm::OpenMPIRBuilder::InsertPointOrErrorTy afterIP =
@@ -2526,7 +2615,7 @@ convertOmpTaskOp(omp::TaskOp taskOp, llvm::IRBuilderBase &builder,
           ompLoc, allocaIP, bodyCB, !taskOp.getUntied(),
           moduleTranslation.lookupValue(taskOp.getFinal()),
           moduleTranslation.lookupValue(taskOp.getIfExpr()), dds,
-          taskOp.getMergeable(),
+          affinityData, taskOp.getMergeable(),
           moduleTranslation.lookupValue(taskOp.getEventHandle()),
           moduleTranslation.lookupValue(taskOp.getPriority()));
 
@@ -7214,7 +7303,8 @@ LogicalResult OpenMPDialectLLVMIRTranslationInterface::convertOperation(
           })
           .Case<omp::YieldOp, omp::TerminatorOp, omp::DeclareMapperOp,
                 omp::DeclareMapperInfoOp, omp::DeclareReductionOp,
-                omp::CriticalDeclareOp>([](auto op) {
+                omp::CriticalDeclareOp, omp::IteratorsOp,
+                omp::AffinityEntryOp>([](auto op) {
             // `yield` and `terminator` can be just omitted. The block structure
             // was created in the region that handles their parent operation.
             // `declare_reduction` will be used by reductions and is not

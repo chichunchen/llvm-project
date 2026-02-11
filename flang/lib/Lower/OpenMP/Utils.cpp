@@ -999,6 +999,35 @@ bool hasIVReference(
   return false;
 }
 
+int64_t getStaticObjectSize(mlir::Type addrTy, const mlir::DataLayout &dl) {
+  auto refTy = mlir::dyn_cast<fir::ReferenceType>(addrTy);
+
+  // Bounds?
+  if (mlir::isa<fir::BoxType>(addrTy)) {
+    llvm::errs() << "Descriptor backed objects do not have a static size, got: "
+                 << addrTy << "\n";
+    return -1;
+  }
+
+  mlir::Type eleTy = refTy.getEleTy();
+
+  // If ref to array, compute total bytes if shape is static.
+  if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(eleTy)) {
+    int64_t elems = 1;
+    for (int64_t d : seqTy.getShape()) {
+      if (d < 0) return -1; // dynamic extent
+      elems *= d;
+    }
+    return elems * static_cast<int64_t>(dl.getTypeSize(seqTy.getEleTy()));
+  }
+  if (eleTy.isIntOrFloat())
+    return static_cast<int64_t>(dl.getTypeSize(eleTy));
+
+  llvm::errs() << "Unsupported type for static size calculation: " << eleTy
+               << "\n";
+  return -1;
+}
+
 } // namespace omp
 } // namespace lower
 } // namespace Fortran

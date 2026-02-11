@@ -196,6 +196,8 @@ mlir::Value genIteratorCoordinate(Fortran::lower::AbstractConverter &converter,
                                   llvm::ArrayRef<mlir::Value> ivs,
                                   mlir::Location loc);
 
+int64_t getStaticObjectSize(mlir::Type addrTy, const mlir::DataLayout &dl);
+
 } // namespace omp
 } // namespace lower
 } // namespace Fortran

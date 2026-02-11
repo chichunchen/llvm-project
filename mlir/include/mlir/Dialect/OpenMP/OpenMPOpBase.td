@@ -52,8 +52,8 @@ def OpenMP_IteratedType : OpenMP_Type<"Iterated", "iterated"> {
 def OpenMP_AffinityEntryType : OpenMP_Type<"AffinityEntry", "affinity_entry"> {
   let summary = "Type for representing omp affinity clause locator information";
 
-  let parameters = (ins "Type":$addrType, "Type":$boundsType);
-  let assemblyFormat = "`<` $addrType `,` $boundsType `>`";
+  let parameters = (ins "Type":$addrType, "Type":$lenType);
+  let assemblyFormat = "`<` $addrType `,` $lenType `>`";
 }
 
 //===---------------------------------------------------------------------===//
