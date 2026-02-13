@@ -320,11 +320,6 @@ static LogicalResult checkImplementationStatus(Operation &op) {
                           << clauseName << " in " << op.getName()
                           << " operation";
   };
-
-  auto checkAffinity = [&todo](auto op, LogicalResult &result) {
-    if (!op.getAffinityVars().empty())
-      result = todo("affinity");
-  };
   auto checkAllocate = [&todo](auto op, LogicalResult &result) {
     if (!op.getAllocateVars().empty() || !op.getAllocatorVars().empty())
       result = todo("allocate");
@@ -413,7 +408,6 @@ static LogicalResult checkImplementationStatus(Operation &op) {
         checkThreadLimit(op, result);
       })
       .Case([&](omp::TaskOp op) {
-        // checkAffinity(op, result);
         checkAllocate(op, result);
         checkInReduction(op, result);
       })
@@ -2312,7 +2306,7 @@ static LogicalResult buildTaskAffinityList(mlir::omp::TaskOp taskOp,
                                           llvm::IRBuilderBase &builder,
                                           LLVM::ModuleTranslation &moduleTranslation,
                                           llvm::OpenMPIRBuilder::AffinityData &AD) {
-  if (taskOp.getAffinityVars().empty() && taskOp.getIterated().empty()) {
+  if (taskOp.getAffinityVars().empty()) {
     return success();
   }
 
@@ -2389,6 +2383,102 @@ static LogicalResult buildTaskAffinityList(mlir::omp::TaskOp taskOp,
   AD.AffinityCount = builder.getInt32(static_cast<uint32_t>(affinityItems.size()));
   AD.AffinityCount->dump();
   return success();
+}
+
+static LogicalResult
+buildAffinityIterator(mlir::omp::IteratorsOp itersOp,
+                      llvm::IRBuilderBase &builder,
+                      mlir::LLVM::ModuleTranslation &moduleTranslation,
+                      llvm::OpenMPIRBuilder::AffinityData &A) {
+  llvm::LLVMContext &ctx = builder.getContext();
+
+  auto *AffTy = llvm::StructType::get(builder.getInt64Ty(),  // base_addr
+                                      builder.getInt64Ty(),  // len
+                                      builder.getInt32Ty()); // flags
+
+  // TODO: compute exact trip count.
+  llvm::Value *count64 = llvm::ConstantInt::get(builder.getInt64Ty(), 16);
+  auto *list = builder.CreateAlloca(AffTy, count64, "omp.affinity_list");
+
+  if (itersOp.getLbs().size() != 1)
+    return itersOp.emitOpError() << "only 1D iterator supported for now";
+
+  llvm::Value *lb = moduleTranslation.lookupValue(itersOp.getLbs()[0]);
+  llvm::Value *ub = moduleTranslation.lookupValue(itersOp.getUbs()[0]);
+  llvm::Value *step = moduleTranslation.lookupValue(itersOp.getSteps()[0]);
+
+  if (!lb->getType()->isIntegerTy(64))
+    lb = builder.CreateZExtOrTrunc(lb, builder.getInt64Ty());
+  if (!ub->getType()->isIntegerTy(64))
+    ub = builder.CreateZExtOrTrunc(ub, builder.getInt64Ty());
+  if (!step->getType()->isIntegerTy(64))
+    step = builder.CreateZExtOrTrunc(step, builder.getInt64Ty());
+
+  llvm::Function *F = builder.GetInsertBlock()->getParent();
+  llvm::BasicBlock *preBB = builder.GetInsertBlock();
+  llvm::BasicBlock *hdrBB = llvm::BasicBlock::Create(ctx, "omp.iter.hdr", F);
+  llvm::BasicBlock *bodyBB = llvm::BasicBlock::Create(ctx, "omp.iter.body", F);
+  llvm::BasicBlock *latchBB =
+      llvm::BasicBlock::Create(ctx, "omp.iter.latch", F);
+  llvm::BasicBlock *exitBB = llvm::BasicBlock::Create(ctx, "omp.iter.exit", F);
+
+  builder.CreateBr(hdrBB);
+
+  // --- header ---
+  builder.SetInsertPoint(hdrBB);
+  llvm::PHINode *iv = builder.CreatePHI(builder.getInt64Ty(), 2, "omp.it.iv");
+  iv->addIncoming(lb, preBB);
+
+  llvm::Value *cond = builder.CreateICmpSLE(iv, ub); // iv <= ub
+  builder.CreateCondBr(cond, bodyBB, exitBB);
+
+  // --- body ---
+  builder.SetInsertPoint(bodyBB);
+
+  mlir::Block &mlirBody = itersOp.getRegion().front();
+  moduleTranslation.mapValue(mlirBody.getArgument(0), iv);
+  moduleTranslation.mapBlock(&mlirBody, bodyBB);
+
+  // Translate iterator region ops into bodyBB
+  if (failed(moduleTranslation.convertBlock(mlirBody,
+                                            /*ignoreArguments=*/true, builder)))
+    return itersOp.emitOpError() << "failed to translate iterators region";
+
+  auto yield = mlir::dyn_cast<mlir::omp::YieldOp>(mlirBody.getTerminator());
+  auto entryOp =
+      yield.getResults()[0].getDefiningOp<mlir::omp::AffinityEntryOp>();
+
+  llvm::Value *addr = moduleTranslation.lookupValue(entryOp.getAddr());
+  llvm::Value *len = moduleTranslation.lookupValue(entryOp.getLen());
+
+  // Store List[outIdx]
+  llvm::Value *slotIdx = builder.CreateSub(iv, lb); // lb..ub  -> 0..(ub-lb)
+  llvm::Value *slot = builder.CreateInBoundsGEP(AffTy, list, slotIdx);
+  llvm::Value *baseAddrI64 = builder.CreatePtrToInt(addr, builder.getInt64Ty());
+
+  builder.CreateStore(baseAddrI64, builder.CreateStructGEP(AffTy, slot, 0));
+  builder.CreateStore(len, builder.CreateStructGEP(AffTy, slot, 1));
+  builder.CreateStore(builder.getInt32(0),
+                      builder.CreateStructGEP(AffTy, slot, 2));
+
+  builder.CreateBr(latchBB);
+
+  // --- latch ---
+  builder.SetInsertPoint(latchBB);
+  llvm::Value *next = builder.CreateAdd(iv, step);
+  iv->addIncoming(next, latchBB);
+  builder.CreateBr(hdrBB);
+
+  // --- exit ---
+  builder.SetInsertPoint(exitBB);
+
+  // Clean up region mappings if you will translate other regions later.
+  moduleTranslation.forgetMapping(itersOp.getRegion());
+
+  A.AffinityArray = list;
+  llvm::Value *Count = builder.CreateSub(iv, builder.getInt64(1));
+  A.AffinityCount = builder.CreateTrunc(Count, builder.getInt32Ty());
+  return mlir::success();
 }
 
 /// Converts an OpenMP task construct into LLVM IR using OpenMPIRBuilder.
@@ -2608,6 +2698,14 @@ convertOmpTaskOp(omp::TaskOp taskOp, llvm::IRBuilderBase &builder,
   llvm::OpenMPIRBuilder::AffinityData affinityData;
   if (failed(buildTaskAffinityList(taskOp, builder, moduleTranslation, affinityData)))
     return failure();
+  if (!taskOp.getIterated().empty()) {
+    for (size_t i = 0; i < taskOp.getIterated().size(); ++i) {
+      auto iterOp = taskOp.getIterated()[i].getDefiningOp<omp::IteratorsOp>();
+      // TODO should pass array of affinity data to support multiple
+      // iterators/induction variables
+      buildAffinityIterator(iterOp, builder, moduleTranslation, affinityData);
+    }
+  }
 
   llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
   llvm::OpenMPIRBuilder::InsertPointOrErrorTy afterIP =
