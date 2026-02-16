@@ -4240,6 +4240,34 @@ public:
   ~ScanInfo() { delete (ScanBuffPtrs); }
 };
 
+class IteratorLoopNestScope {
+private:
+  llvm::IRBuilderBase &B;
+  llvm::LLVMContext &Ctx;
+
+  unsigned Dims = 0;
+  llvm::ArrayRef<llvm::Value *> LBs;
+  llvm::ArrayRef<llvm::Value *> UBs;
+  llvm::ArrayRef<llvm::Value *> Steps;
+
+  llvm::SmallVector<llvm::PHINode *> IVs;
+  llvm::SmallVector<llvm::BasicBlock *> HdrBBs;
+  llvm::SmallVector<llvm::BasicBlock *> BodyBBs;
+  llvm::SmallVector<llvm::BasicBlock *> LatchBBs;
+  llvm::SmallVector<llvm::BasicBlock *> ExitBBs;
+
+public:
+  IteratorLoopNestScope(llvm::IRBuilderBase &Builder,
+                        unsigned Dims,
+                        llvm::ArrayRef<llvm::Value *> LBs,
+                        llvm::ArrayRef<llvm::Value *> UBs,
+                        llvm::ArrayRef<llvm::Value *> Steps);
+
+  ~IteratorLoopNestScope();
+
+  llvm::ArrayRef<llvm::PHINode *> getIVs() const { return IVs; }
+};
+
 } // end namespace llvm
 
 #endif // LLVM_FRONTEND_OPENMP_OMPIRBUILDER_H
