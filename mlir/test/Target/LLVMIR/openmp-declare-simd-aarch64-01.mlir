@@ -1,6 +1,5 @@
 // RUN: mlir-translate --mlir-to-llvmir %s | FileCheck %s
 //
-// TODO linear modifier (val, ref, uval)
 // TODO linear scalar forms like `constlinear`
 
 module attributes {
@@ -171,13 +170,48 @@ module attributes {
     llvm.return
   }
 
+  // ************************************
+  // * linear(val), linear(ref), linear(uval) *
+  // ************************************
+
+  // Listing 2 adapted: linear(val) on a sincos-like signature.
+  // val modifier on !llvm.ptr → LinearVal → mangled as 'L'.
+  // NDS=64 (f64 and pointers are 64-bit), no simdlen → VLEN from NDS.
+  llvm.func @sincos_val(%in: f64, %sin: !llvm.ptr, %cos: !llvm.ptr) attributes {
+    target_features = #llvm.target_features<["+neon"]>
+  } {
+    %c8 = llvm.mlir.constant(8 : i64) : i64
+    omp.declare_simd linear(val(%sin : !llvm.ptr = %c8 : i64),
+                            val(%cos : !llvm.ptr = %c8 : i64))
+    llvm.return
+  }
+
+  // Listing 3 adapted: linear(ref) on a pointer parameter.
+  // ref modifier → LinearRef → mangled as 'R'.
+  // MTV is false for LinearRef, NDS comes from PBV of args.
+  llvm.func @sincos_ref(%in: f64, %sin: !llvm.ptr, %cos: !llvm.ptr) attributes {
+    target_features = #llvm.target_features<["+neon"]>
+  } {
+    %c8 = llvm.mlir.constant(8 : i64) : i64
+    omp.declare_simd linear(ref(%sin : !llvm.ptr = %c8 : i64),
+                            ref(%cos : !llvm.ptr = %c8 : i64))
+    llvm.return
+  }
+
+  // linear(uval) — mangled as 'U'.
+  // MTV is false for LinearUVal.
+  llvm.func @sincos_uval(%in: f64, %sin: !llvm.ptr, %cos: !llvm.ptr) attributes {
+    target_features = #llvm.target_features<["+neon"]>
+  } {
+    %c8 = llvm.mlir.constant(8 : i64) : i64
+    omp.declare_simd linear(uval(%sin : !llvm.ptr = %c8 : i64),
+                            uval(%cos : !llvm.ptr = %c8 : i64))
+    llvm.return
+  }
+
   // Selection of tests based on the examples provided in chapter 5 of
   // the Vector Function ABI specifications for AArch64, at
   // https://developer.arm.com/products/software-development-tools/hpc/arm-compiler-for-hpc/vector-function-abi.
-  //
-  // Listings 2 and 3 from the reference C test are intentionally omitted
-  // because MLIR does not yet support `linear(val: ...)`, `linear(ref: ...)`,
-  // or `linear(uval: ...)` clause spellings.
 
   // Listing 6, p. 19
   llvm.func @foo4(%x: !llvm.ptr, %y: f32) -> i32 attributes {
@@ -233,6 +267,9 @@ module attributes {
 
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vl8l8_sincos" "_ZGVnN2vl8l8_sincos" "target-features"="+neon" }
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vl8l16_SinCos" "_ZGVnN2vl8l16_SinCos" "target-features"="+neon" }
+// CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vL8L8_sincos_val" "_ZGVnN2vL8L8_sincos_val" "target-features"="+neon" }
+// CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vR8R8_sincos_ref" "_ZGVnN2vR8R8_sincos_ref" "target-features"="+neon" }
+// CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vU8U8_sincos_uval" "_ZGVnN2vU8U8_sincos_uval" "target-features"="+neon" }
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM4l4a16v_foo4" "_ZGVnN4l4a16v_foo4" "target-features"="+neon" }
 
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnN2vv_DoRGB" "target-features"="+neon" }

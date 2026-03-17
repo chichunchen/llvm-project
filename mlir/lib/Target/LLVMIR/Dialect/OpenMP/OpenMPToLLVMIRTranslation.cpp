@@ -7470,6 +7470,7 @@ static void populateLinearParam(
     llvm::SmallVectorImpl<llvm::OpenMPIRBuilder::DeclareSimdAttrTy> &attrs) {
   OperandRange linearVars = ds.getLinearVars();
   OperandRange linearStepVars = ds.getLinearStepVars();
+  std::optional<ArrayAttr> linearModifiers = ds.getLinearModifiers();
 
   const llvm::APSInt defaultStep(llvm::APInt(/*numBits=*/32, /*val=*/1),
                                  /*isUnsigned=*/true);
@@ -7488,9 +7489,33 @@ static void populateLinearParam(
   for (size_t i = 0; i < linearVars.size(); ++i) {
     llvm::OpenMPIRBuilder::DeclareSimdAttrTy &paramAttr =
         attrs[argIndexMap[linearVars[i]]];
-    // TODO Use Linear for now since linear modifier is not supported in
-    // OpenMP dialect yet.
-    paramAttr.Kind = llvm::OpenMPIRBuilder::DeclareSimdKindTy::Linear;
+    omp::LinearModifierAttr linearModAttr;
+
+    if (linearModifiers && (*linearModifiers)[i])
+      linearModAttr = dyn_cast<omp::LinearModifierAttr>((*linearModifiers)[i]);
+
+    if (linearModAttr) {
+      switch (linearModAttr.getValue()) {
+      case omp::LinearModifier::ref:
+        paramAttr.Kind = llvm::OpenMPIRBuilder::DeclareSimdKindTy::LinearRef;
+        break;
+      case omp::LinearModifier::uval:
+        paramAttr.Kind = llvm::OpenMPIRBuilder::DeclareSimdKindTy::LinearUVal;
+        break;
+      case omp::LinearModifier::val:
+        // Match clang: val on a non-reference (non-pointer SSA type) is
+        // semantically identical to plain linear.  Only pointer-typed
+        // vars (which may originate from C++ references) get LinearVal.
+        if (isa<LLVM::LLVMPointerType>(linearVars[i].getType()))
+          paramAttr.Kind = llvm::OpenMPIRBuilder::DeclareSimdKindTy::LinearVal;
+        else
+          paramAttr.Kind = llvm::OpenMPIRBuilder::DeclareSimdKindTy::Linear;
+        break;
+      }
+    } else {
+      paramAttr.Kind = llvm::OpenMPIRBuilder::DeclareSimdKindTy::Linear;
+    }
+
     paramAttr.HasVarStride = false;
     paramAttr.StrideOrArg = defaultStep;
 
@@ -7655,11 +7680,11 @@ static bool getAArch64PBV(Type ty, const DataLayout &dl) {
 
 /// Computes the lane size (LS) of a return type or of an input parameter,
 /// as defined by `LS(P)` in 3.2.1 of the AAVFABI.
-/// TODO: Add support for references, section 3.2.1, item 1.
 static unsigned getAArch64LS(Type ty,
                              llvm::OpenMPIRBuilder::DeclareSimdKindTy kind,
-                             const DataLayout &dl) {
-  if (!getAArch64MTV(ty, kind)) {
+                             const DataLayout &dl,
+                             bool isReferenceLikeType = false) {
+  if (!getAArch64MTV(ty, kind, isReferenceLikeType)) {
     if (auto ptrLikeTy = dyn_cast<omp::PointerLikeType>(ty)) {
       Type elemTy = ptrLikeTy.getElementType();
       if (elemTy && getAArch64PBV(elemTy, dl))
@@ -7682,6 +7707,11 @@ getNDSWDS(FunctionOpInterface funcOp,
           const DataLayout &dl) {
   bool outputBecomesInput = false;
 
+  // Determine whether a function argument type is "reference-like".
+  auto isRefLike = [](Type ty) -> bool {
+    return isa<omp::PointerLikeType>(ty) || isa<LLVM::LLVMPointerType>(ty);
+  };
+
   llvm::SmallVector<unsigned, 8> sizes;
   if (funcOp.getNumResults() != 0) {
     Type retTy = funcOp.getResultTypes().front();
@@ -7695,7 +7725,8 @@ getNDSWDS(FunctionOpInterface funcOp,
   }
 
   for (auto [index, argTy] : llvm::enumerate(funcOp.getArgumentTypes()))
-    sizes.push_back(getAArch64LS(argTy, paramAttrs[index].Kind, dl));
+    sizes.push_back(
+        getAArch64LS(argTy, paramAttrs[index].Kind, dl, isRefLike(argTy)));
 
   assert(!sizes.empty() && "Unable to determine NDS and WDS.");
   // The LS of a function parameter / return value can only be a power
