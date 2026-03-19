@@ -7678,18 +7678,27 @@ static bool getAArch64PBV(Type ty, const DataLayout &dl) {
   return false;
 }
 
-/// Computes the lane size (LS) of a return type or of an input parameter,
-/// as defined by `LS(P)` in 3.2.1 of the AAVFABI.
+// Computes the lane size (LS) of a return type or of an input parameter,
+// as defined by `LS(P)` in 3.2.1 of the AAVFABI.
+//
+// argElemType provides  the original language-level type for an opaque
+// `!llvm.ptr` parameter, enabling correct LS computation.
 static unsigned getAArch64LS(Type ty,
                              llvm::OpenMPIRBuilder::DeclareSimdKindTy kind,
                              const DataLayout &dl,
-                             bool isReferenceLikeType = false) {
+                             bool isReferenceLikeType = false,
+                             Type argElemType = nullptr) {
   if (!getAArch64MTV(ty, kind, isReferenceLikeType)) {
     if (auto ptrLikeTy = dyn_cast<omp::PointerLikeType>(ty)) {
       Type elemTy = ptrLikeTy.getElementType();
       if (elemTy && getAArch64PBV(elemTy, dl))
         return dl.getTypeSizeInBits(elemTy);
     }
+    // For opaque !llvm.ptr, use the original type from arg_types
+    // if available, since the pointee type is lost at LLVM IR level.
+    if (isa<LLVM::LLVMPointerType>(ty) && argElemType &&
+        getAArch64PBV(argElemType, dl))
+      return dl.getTypeSizeInBits(argElemType);
   }
 
   if (getAArch64PBV(ty, dl))
@@ -7701,10 +7710,14 @@ static unsigned getAArch64LS(Type ty,
 
 // Get Narrowest Data Size (NDS) and Widest Data Size (WDS) from the
 // signature of the scalar function, as defined in 3.2.2 of the AAVFABI.
+//
+// argElemTypes maps function argument index to the original language-level
+// type from `arg_types`, if available.  This is used to recover pointee-type
+// information lost in opaque `!llvm.ptr`.
 static std::tuple<unsigned, unsigned, bool>
 getNDSWDS(FunctionOpInterface funcOp,
           ArrayRef<llvm::OpenMPIRBuilder::DeclareSimdAttrTy> paramAttrs,
-          const DataLayout &dl) {
+          const DataLayout &dl, ArrayRef<Type> argElemTypes = {}) {
   bool outputBecomesInput = false;
 
   // Determine whether a function argument type is "reference-like".
@@ -7724,9 +7737,11 @@ getNDSWDS(FunctionOpInterface funcOp,
     }
   }
 
-  for (auto [index, argTy] : llvm::enumerate(funcOp.getArgumentTypes()))
-    sizes.push_back(
-        getAArch64LS(argTy, paramAttrs[index].Kind, dl, isRefLike(argTy)));
+  for (auto [index, argTy] : llvm::enumerate(funcOp.getArgumentTypes())) {
+    Type elemTy = (index < argElemTypes.size()) ? argElemTypes[index] : nullptr;
+    sizes.push_back(getAArch64LS(argTy, paramAttrs[index].Kind, dl,
+                                 isRefLike(argTy), elemTy));
+  }
 
   assert(!sizes.empty() && "Unable to determine NDS and WDS.");
   // The LS of a function parameter / return value can only be a power
@@ -7794,7 +7809,19 @@ convertDeclareSimdOp(Operation &opInst, llvm::IRBuilderBase &builder,
                                            branch);
   } else if (targetTriple.getArch() == llvm::Triple::aarch64) {
     DataLayout dl(opInst.getParentOfType<ModuleOp>());
-    auto [nds, wds, outputBecomesInput] = getNDSWDS(funcOp, paramAttrs, dl);
+
+    // Build a per-argument element type array from arg_types.
+    // This recovers pointee-type information for opaque !llvm.ptr params.
+    llvm::SmallVector<Type> argElemTypes(funcOp.getNumArguments());
+    if (std::optional<ArrayAttr> argTypeAttrs = declareSimdOp.getArgTypes()) {
+      for (auto [i, attr] : llvm::enumerate(*argTypeAttrs)) {
+        if (auto tyAttr = dyn_cast_if_present<TypeAttr>(attr))
+          argElemTypes[i] = tyAttr.getValue();
+      }
+    }
+
+    auto [nds, wds, outputBecomesInput] =
+        getNDSWDS(funcOp, paramAttrs, dl, argElemTypes);
     unsigned vLen = vLenVal.getZExtValue();
 
     auto hasTargetFeature = [&](llvm::StringRef feature) {

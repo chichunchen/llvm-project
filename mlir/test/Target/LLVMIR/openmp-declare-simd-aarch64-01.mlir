@@ -1,6 +1,4 @@
 // RUN: mlir-translate --mlir-to-llvmir %s | FileCheck %s
-//
-// TODO linear scalar forms like `constlinear`
 
 module attributes {
   llvm.target_triple = "aarch64-unknown-linux-gnu",
@@ -143,9 +141,15 @@ module attributes {
   // ************************************
   // * Linear with a constant parameter *
   // ************************************
-  //
-  // `constlinear` is intentionally omitted because scalar `linear(...)`
-  // does not currently parse in this LLVM-dialect test shape.
+
+  llvm.func @constlinear(%i: i32) -> f64 attributes {
+    target_features = #llvm.target_features<["+neon"]>
+  } {
+    %c1 = llvm.mlir.constant(1 : i32) : i32
+    omp.declare_simd notinbranch linear(%i : i32 = %c1 : i32)
+    %zero = llvm.mlir.constant(0.0 : f64) : f64
+    llvm.return %zero : f64
+  }
 
   // *************************
   // * sincos-like signature *
@@ -175,8 +179,8 @@ module attributes {
   // ************************************
 
   // Listing 2 adapted: linear(val) on a sincos-like signature.
-  // val modifier on !llvm.ptr → LinearVal → mangled as 'L'.
-  // NDS=64 (f64 and pointers are 64-bit), no simdlen → VLEN from NDS.
+  // val modifier on !llvm.ptr -> LinearVal -> mangled as 'L'.
+  // NDS=64 (f64 and pointers are 64-bit), no simdlen -> VLEN from NDS.
   llvm.func @sincos_val(%in: f64, %sin: !llvm.ptr, %cos: !llvm.ptr) attributes {
     target_features = #llvm.target_features<["+neon"]>
   } {
@@ -187,7 +191,7 @@ module attributes {
   }
 
   // Listing 3 adapted: linear(ref) on a pointer parameter.
-  // ref modifier → LinearRef → mangled as 'R'.
+  // ref modifier -> LinearRef -> mangled as 'R'.
   // MTV is false for LinearRef, NDS comes from PBV of args.
   llvm.func @sincos_ref(%in: f64, %sin: !llvm.ptr, %cos: !llvm.ptr) attributes {
     target_features = #llvm.target_features<["+neon"]>
@@ -231,6 +235,33 @@ module attributes {
     omp.declare_simd notinbranch
     llvm.return %x : !llvm.struct<(i8, i8, i8)>
   }
+
+  // ********************************
+  // * arg_types for NDS/WDS fix    *
+  // ********************************
+
+  // For LinearRef/LinearUVal, MTV=false.  Without arg_types,
+  // opaque !llvm.ptr gives LS=sizeof(ptr)=64.  With arg_types
+  // = [f64, i32, i32], the ptr params' LS becomes sizeof(i32)=32,
+  // so NDS=min(64,32)=32 -> VLEN={2,4} instead of just {2}.
+  llvm.func @sincos_ref_lvt(%in: f64, %sin: !llvm.ptr, %cos: !llvm.ptr) attributes {
+    target_features = #llvm.target_features<["+neon"]>
+  } {
+    %c4 = llvm.mlir.constant(4 : i64) : i64
+    omp.declare_simd linear(ref(%sin : !llvm.ptr = %c4 : i64),
+                            ref(%cos : !llvm.ptr = %c4 : i64)) {arg_types = [f64, i32, i32]}
+    llvm.return
+  }
+
+  // Same but without arg_types: LS=64 (ptr) -> NDS=64 -> VLEN={2} only
+  llvm.func @sincos_ref_no_lvt(%in: f64, %sin: !llvm.ptr, %cos: !llvm.ptr) attributes {
+    target_features = #llvm.target_features<["+neon"]>
+  } {
+    %c4 = llvm.mlir.constant(4 : i64) : i64
+    omp.declare_simd linear(ref(%sin : !llvm.ptr = %c4 : i64),
+                            ref(%cos : !llvm.ptr = %c4 : i64))
+    llvm.return
+  }
 }
 
 // CHECK: attributes {{#[0-9]+}} = {
@@ -265,6 +296,8 @@ module attributes {
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM4vv_c01" "_ZGVnM8vv_c01" "target-features"="+neon" }
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM16uv_c02" "_ZGVnM8uv_c02" "target-features"="+neon" }
 
+// CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnN2l_constlinear" "_ZGVnN4l_constlinear" "target-features"="+neon" }
+
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vl8l8_sincos" "_ZGVnN2vl8l8_sincos" "target-features"="+neon" }
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vl8l16_SinCos" "_ZGVnN2vl8l16_SinCos" "target-features"="+neon" }
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vL8L8_sincos_val" "_ZGVnN2vL8L8_sincos_val" "target-features"="+neon" }
@@ -273,3 +306,9 @@ module attributes {
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM4l4a16v_foo4" "_ZGVnN4l4a16v_foo4" "target-features"="+neon" }
 
 // CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnN2vv_DoRGB" "target-features"="+neon" }
+
+// arg_types gives LS=32 (from i32) -> NDS=32 -> VLEN={2,4}
+// CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vR4R4_sincos_ref_lvt" "_ZGVnM4vR4R4_sincos_ref_lvt" "_ZGVnN2vR4R4_sincos_ref_lvt" "_ZGVnN4vR4R4_sincos_ref_lvt" "target-features"="+neon" }
+
+// Without arg_types: LS=64 (ptr) -> NDS=64 -> VLEN={2} only
+// CHECK-DAG: attributes {{#[0-9]+}} = { "_ZGVnM2vR4R4_sincos_ref_no_lvt" "_ZGVnN2vR4R4_sincos_ref_no_lvt" "target-features"="+neon" }
