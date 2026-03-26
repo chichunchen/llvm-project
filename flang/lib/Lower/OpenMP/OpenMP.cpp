@@ -4480,13 +4480,59 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
   };
 
   fir::FirOpBuilder &builder = converter.getFirOpBuilder();
-  bool isDeviceCompilation =
-      llvm::cast<mlir::omp::OffloadModuleInterface>(*converter.getModuleOp())
-          .getIsTargetDevice();
+  auto offloadMod =
+      llvm::cast<mlir::omp::OffloadModuleInterface>(*converter.getModuleOp());
+  bool isDeviceCompilation = offloadMod.getIsTargetDevice();
   llvm::Triple targetTriple = fir::getTargetTriple(builder.getModule());
+
+  // If offload target triples are available, use the first one so that
+  // target_device={kind,arch} selectors can match the offload target.
+  llvm::Triple offloadTriple;
+  auto targetTriples = offloadMod.getTargetTriples();
+  if (!targetTriples.empty())
+    if (auto tripleAttr =
+            llvm::dyn_cast<mlir::StringAttr>(targetTriples.front()))
+      offloadTriple = llvm::Triple(tripleAttr.getValue());
+
   llvm::omp::OMPContext ompCtx(isDeviceCompilation, targetTriple,
-                               /*TargetOffloadTriple=*/llvm::Triple(),
-                               /*DeviceNum=*/-1);
+                               offloadTriple, /*DeviceNum=*/-1);
+
+  // Populate construct traits from enclosing OpenMP constructs by walking
+  // the parentConstruct chain. Collect traits innermost-first, then reverse
+  // to outermost-first order as expected by OMPContext's ordered subsequence
+  // matching (isVariantApplicableInContext).
+  llvm::SmallVector<llvm::omp::TraitProperty, 8> constructTraits;
+  for (auto *parentEval = eval.parentConstruct; parentEval;
+       parentEval = parentEval->parentConstruct) {
+    const auto *ompConstruct = parentEval->getIf<parser::OpenMPConstruct>();
+    if (!ompConstruct)
+      continue;
+    llvm::omp::Directive dir =
+        parser::omp::GetOmpDirectiveName(*ompConstruct).v;
+    // Decompose compound directives into their constituent construct
+    // traits, following the same decomposition order as Clang
+    // (handleDeclareVariantConstructTrait): target → teams → parallel →
+    // worksharing → simd. Since we walk innermost-first, the per-directive
+    // order is reversed by the final std::reverse below.
+    if (llvm::omp::allSimdSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_simd_simd);
+    if (llvm::omp::allDoSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_for_for);
+    if (llvm::omp::allParallelSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_parallel_parallel);
+    if (llvm::omp::allTeamsSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_teams_teams);
+    if (llvm::omp::allTargetSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_target_target);
+  }
+  std::reverse(constructTraits.begin(), constructTraits.end());
+  for (auto trait : constructTraits)
+    ompCtx.addTrait(trait);
 
   llvm::SmallVector<Candidate> candidates;
   llvm::SmallVector<llvm::omp::VariantMatchInfo, 4> vmis;
