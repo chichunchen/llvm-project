@@ -4641,6 +4641,10 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
     } else if (const auto *defaultClause =
                    std::get_if<parser::OmpClause::Default>(&clause.u)) {
       // DEFAULT(directive-spec) is OpenMP 5.0 syntax for OTHERWISE.
+      if (semaCtx.langOptions().OpenMPVersion >= 52)
+        mlir::emitWarning(converter.genLocation(clause.source),
+                          "DEFAULT clause on METADIRECTIVE is deprecated "
+                          "in OpenMP 5.2; use OTHERWISE instead");
       if (const auto *dirSpecPtr = std::get_if<
               common::Indirection<parser::OmpDirectiveSpecification>>(
               &defaultClause->v.u))
