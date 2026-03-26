@@ -4462,6 +4462,28 @@ makeVariantMatchInfo(llvm::omp::VariantMatchInfo &vmi,
   }
 }
 
+/// OMPContext subclass that checks ISA traits against the module's
+/// target features (e.g., device={isa("neon")}).
+namespace {
+struct FlangBackendOMPContext final : public llvm::omp::OMPContext {
+  FlangBackendOMPContext(bool isDeviceCompilation, llvm::Triple targetTriple,
+                         llvm::Triple targetOffloadTriple, int deviceNum,
+                         mlir::LLVM::TargetFeaturesAttr features)
+      : OMPContext(isDeviceCompilation, targetTriple, targetOffloadTriple,
+                   deviceNum),
+        targetFeatures(features) {}
+
+  bool matchesISATrait(llvm::StringRef rawString) const override {
+    if (!targetFeatures || targetFeatures.nullOrEmpty())
+      return false;
+    return targetFeatures.contains(("+" + rawString).str());
+  }
+
+private:
+  mlir::LLVM::TargetFeaturesAttr targetFeatures;
+};
+} // namespace
+
 static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
                    semantics::SemanticsContext &semaCtx,
                    lower::pft::Evaluation &eval,
@@ -4494,8 +4516,11 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
             llvm::dyn_cast<mlir::StringAttr>(targetTriples.front()))
       offloadTriple = llvm::Triple(tripleAttr.getValue());
 
-  llvm::omp::OMPContext ompCtx(isDeviceCompilation, targetTriple,
-                               offloadTriple, /*DeviceNum=*/-1);
+  mlir::LLVM::TargetFeaturesAttr targetFeatures =
+      fir::getTargetFeatures(builder.getModule());
+  FlangBackendOMPContext ompCtx(isDeviceCompilation, targetTriple,
+                                offloadTriple, /*DeviceNum=*/-1,
+                                targetFeatures);
 
   // Populate construct traits from enclosing OpenMP constructs by walking
   // the parentConstruct chain. Collect traits innermost-first, then reverse
