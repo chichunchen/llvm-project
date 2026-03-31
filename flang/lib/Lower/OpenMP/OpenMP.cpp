@@ -4107,7 +4107,8 @@ static void genOpenMPDeclareMapperImpl(
   List<Clause> clauses = makeClauses(construct.v.Clauses(), semaCtx);
   ClauseProcessor cp(converter, semaCtx, clauses);
   cp.processMap(loc, stmtCtx, clauseOps);
-  mlir::omp::DeclareMapperInfoOp::create(firOpBuilder, loc, clauseOps.mapVars);
+  mlir::omp::DeclareMapperInfoOp::create(firOpBuilder, loc, clauseOps.mapVars,
+                                         /*map_iterated=*/{});
 }
 
 static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
