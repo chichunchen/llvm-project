@@ -4466,11 +4466,15 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
                    const parser::OmpMetadirectiveDirective &meta) {
   const auto &dirSpec = meta.v;
   const parser::OmpClauseList &clauseList = dirSpec.Clauses();
+  mlir::Location loc = converter.genLocation(dirSpec.source);
 
   // Represents a candidate directive variant from a WHEN or OTHERWISE clause.
   struct Candidate {
     const parser::OmpDirectiveSpecification *dirSpec = nullptr;
     bool isNothing = false;
+    bool isDynamic = false;
+    // For dynamic candidates: the user condition expression to lower.
+    const parser::ScalarExpr *condExpr = nullptr;
   };
 
   fir::FirOpBuilder &builder = converter.getFirOpBuilder();
@@ -4536,9 +4540,19 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
       const parser::ScalarExpr *dynCondExpr = nullptr;
       makeVariantMatchInfo(vmi, *ctxSel, semaCtx, dynCondExpr);
 
-      // Skip dynamic candidates — handled in a later patch.
-      if (dynCondExpr)
+      // Check if this variant has a dynamic user condition.
+      if (dynCondExpr) {
+        // For dynamic candidates, verify that the non-user parts (device,
+        // implementation) still match statically before keeping the candidate.
+        if (!llvm::omp::isVariantApplicableInContext(
+                vmi, ompCtx, /*DeviceOrImplementationSetOnly=*/true))
+          continue; // Device/implementation traits don't match, skip.
+        cand.isDynamic = true;
+        cand.condExpr = dynCondExpr;
+        candidates.push_back(cand);
+        vmis.push_back(vmi);
         continue;
+      }
 
       // Static evaluation using the OMPContext infrastructure.
       if (!llvm::omp::isVariantApplicableInContext(vmi, ompCtx))
@@ -4580,22 +4594,65 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
       lowerDirectiveVariant(*cand.dirSpec);
   };
 
-  // All candidates are statically matched — use scoring to pick the best.
-  if (candidates.empty()) {
-    lowerCandidate(fallback);
+  bool hasDynamic =
+      llvm::any_of(candidates, [](const Candidate &c) { return c.isDynamic; });
+
+  if (!hasDynamic) {
+    // All candidates are statically matched — use scoring to pick the best.
+    if (candidates.empty()) {
+      lowerCandidate(fallback);
+      return;
+    }
+    if (candidates.size() == 1) {
+      lowerCandidate(candidates.front());
+      return;
+    }
+    int bestIdx =
+        llvm::omp::getBestVariantMatchForContext(vmis, ompCtx);
+    if (bestIdx >= 0 &&
+        static_cast<size_t>(bestIdx) < candidates.size()) {
+      lowerCandidate(candidates[bestIdx]);
+    } else {
+      lowerCandidate(fallback);
+    }
     return;
   }
-  if (candidates.size() == 1) {
-    lowerCandidate(candidates.front());
-    return;
+
+  // Dynamic resolution: generate fir.if chain for user conditions.
+  lower::StatementContext stmtCtx;
+
+  // Find the first static candidate as the ultimate else-branch fallback.
+  auto staticIt =
+      llvm::find_if(candidates, [](const Candidate &c) { return !c.isDynamic; });
+  const Candidate *staticFallback =
+      staticIt != candidates.end() ? &*staticIt : &fallback;
+
+  llvm::SmallVector<const Candidate *> dynamicCands;
+  for (const auto &cand : candidates) {
+    if (cand.isDynamic)
+      dynamicCands.push_back(&cand);
   }
-  int bestIdx =
-      llvm::omp::getBestVariantMatchForContext(vmis, ompCtx);
-  if (bestIdx >= 0 &&
-      static_cast<size_t>(bestIdx) < candidates.size()) {
-    lowerCandidate(candidates[bestIdx]);
-  } else {
-    lowerCandidate(fallback);
+
+  for (auto [i, cand] : llvm::enumerate(dynamicCands)) {
+    assert(cand->condExpr && "dynamic candidate must have condition expr");
+    const auto *typedExpr = semantics::GetExpr(semaCtx, *cand->condExpr);
+    assert(typedExpr && "missing typed expression for user condition");
+    mlir::Value condVal =
+        fir::getBase(converter.genExprValue(*typedExpr, stmtCtx, &loc));
+
+    // Convert to i1 if needed.
+    if (condVal.getType() != builder.getI1Type())
+      condVal = builder.createConvert(loc, builder.getI1Type(), condVal);
+
+    auto ifOp = fir::IfOp::create(builder, loc, condVal,
+                                  /*withElse=*/true);
+    builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+    lowerCandidate(*cand);
+
+    // Else: chain to the next condition, or lower the static fallback.
+    builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
+    if (i == dynamicCands.size() - 1)
+      lowerCandidate(*staticFallback);
   }
 }
 
