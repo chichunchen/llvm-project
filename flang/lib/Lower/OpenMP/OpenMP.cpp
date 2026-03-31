@@ -4460,6 +4460,28 @@ makeVariantMatchInfo(llvm::omp::VariantMatchInfo &vmi,
   }
 }
 
+/// OMPContext subclass that checks ISA traits against the module's
+/// target features (e.g., device={isa("neon")}).
+namespace {
+struct TargetOMPContext final : public llvm::omp::OMPContext {
+  TargetOMPContext(bool isDeviceCompilation, llvm::Triple targetTriple,
+                   llvm::Triple targetOffloadTriple, int deviceNum,
+                   mlir::LLVM::TargetFeaturesAttr features)
+      : OMPContext(isDeviceCompilation, targetTriple, targetOffloadTriple,
+                   deviceNum),
+        targetFeatures(features) {}
+
+  bool matchesISATrait(llvm::StringRef rawString) const override {
+    if (!targetFeatures || targetFeatures.nullOrEmpty())
+      return false;
+    return targetFeatures.contains(("+" + rawString).str());
+  }
+
+private:
+  mlir::LLVM::TargetFeaturesAttr targetFeatures;
+};
+} // namespace
+
 static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
                    semantics::SemanticsContext &semaCtx,
                    lower::pft::Evaluation &eval,
@@ -4482,8 +4504,58 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
       llvm::cast<mlir::omp::OffloadModuleInterface>(*converter.getModuleOp());
   bool isDeviceCompilation = offloadMod.getIsTargetDevice();
   llvm::Triple targetTriple = fir::getTargetTriple(builder.getModule());
-  llvm::omp::OMPContext ompCtx(isDeviceCompilation, targetTriple,
-                               llvm::Triple(), /*DeviceNum=*/-1);
+
+  // If offload target triples are available, use the first one so that
+  // target_device={kind,arch} selectors can match the offload target.
+  llvm::Triple offloadTriple;
+  auto targetTriples = offloadMod.getTargetTriples();
+  if (!targetTriples.empty())
+    if (auto tripleAttr =
+            llvm::dyn_cast<mlir::StringAttr>(targetTriples.front()))
+      offloadTriple = llvm::Triple(tripleAttr.getValue());
+
+  mlir::LLVM::TargetFeaturesAttr targetFeatures =
+      fir::getTargetFeatures(builder.getModule());
+  TargetOMPContext ompCtx(isDeviceCompilation, targetTriple,
+                          offloadTriple, /*DeviceNum=*/-1,
+                          targetFeatures);
+
+  // Populate construct traits from enclosing OpenMP constructs by walking
+  // the parentConstruct chain. Collect traits innermost-first, then reverse
+  // to outermost-first order as expected by OMPContext's ordered subsequence
+  // matching (isVariantApplicableInContext).
+  llvm::SmallVector<llvm::omp::TraitProperty, 8> constructTraits;
+  for (auto *parentEval = eval.parentConstruct; parentEval;
+       parentEval = parentEval->parentConstruct) {
+    const auto *ompConstruct = parentEval->getIf<parser::OpenMPConstruct>();
+    if (!ompConstruct)
+      continue;
+    llvm::omp::Directive dir =
+        parser::omp::GetOmpDirectiveName(*ompConstruct).v;
+    // Decompose compound directives into their constituent construct
+    // traits, following the same decomposition order as Clang
+    // (handleDeclareVariantConstructTrait): target -> teams -> parallel ->
+    // worksharing -> simd. Since we walk innermost-first, the per-directive
+    // order is reversed by the final std::reverse below.
+    if (llvm::omp::allSimdSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_simd_simd);
+    if (llvm::omp::allDoSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_for_for);
+    if (llvm::omp::allParallelSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_parallel_parallel);
+    if (llvm::omp::allTeamsSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_teams_teams);
+    if (llvm::omp::allTargetSet.test(dir))
+      constructTraits.push_back(
+          llvm::omp::TraitProperty::construct_target_target);
+  }
+  std::reverse(constructTraits.begin(), constructTraits.end());
+  for (auto trait : constructTraits)
+    ompCtx.addTrait(trait);
 
   llvm::SmallVector<Candidate> candidates;
   llvm::SmallVector<llvm::omp::VariantMatchInfo, 4> vmis;
@@ -4567,6 +4639,10 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
     } else if (const auto *defaultClause =
                    std::get_if<parser::OmpClause::Default>(&clause.u)) {
       // DEFAULT(directive-spec) is OpenMP 5.0 syntax for OTHERWISE.
+      if (semaCtx.langOptions().OpenMPVersion >= 52)
+        mlir::emitWarning(converter.genLocation(clause.source),
+                          "DEFAULT clause on METADIRECTIVE is deprecated "
+                          "in OpenMP 5.2; use OTHERWISE instead");
       if (const auto *dirSpecPtr = std::get_if<
               common::Indirection<parser::OmpDirectiveSpecification>>(
               &defaultClause->v.u))
