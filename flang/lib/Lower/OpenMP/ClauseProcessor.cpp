@@ -252,6 +252,35 @@ static IteratorRange lowerIteratorRange(
   return r;
 }
 
+/// Build omp.map.bounds ops for a single element at position given by
+/// the iterator IVs. Each IV corresponds to one dimension.
+/// The bounds describe a single-element section: lb == ub == iv - start_idx.
+static llvm::SmallVector<mlir::Value>
+genSingleElementBounds(Fortran::lower::AbstractConverter &converter,
+                       hlfir::Entity entity,
+                       llvm::ArrayRef<mlir::Value> ivs, mlir::Location loc) {
+  auto &builder = converter.getFirOpBuilder();
+  mlir::Type idxTy = builder.getIndexType();
+  mlir::Type boundTy = builder.getType<mlir::omp::MapBoundsType>();
+  llvm::SmallVector<mlir::Value> bounds;
+
+  mlir::Value one = builder.createIntegerConstant(loc, idxTy, 1);
+  for (unsigned dim = 0; dim < ivs.size(); ++dim) {
+    mlir::Value iv =
+        fir::ConvertOp::create(builder, loc, idxTy, ivs[dim]);
+    mlir::Value baseLb = hlfir::genLBound(loc, builder, entity, dim);
+    // Normalize IV to 0-based: lb = iv - baseLb
+    mlir::Value lb = mlir::arith::SubIOp::create(builder, loc, iv, baseLb);
+    mlir::Value extent = hlfir::genExtent(loc, builder, entity, dim);
+    mlir::Value bound = mlir::omp::MapBoundsOp::create(
+        builder, loc, boundTy, /*lower_bound=*/lb, /*upper_bound=*/lb,
+        extent, /*stride=*/one, /*stride_in_bytes=*/false,
+        /*start_idx=*/baseLb);
+    bounds.push_back(bound);
+  }
+  return bounds;
+}
+
 template <typename BodyFn>
 static mlir::Value buildIteratorOp(Fortran::lower::AbstractConverter &converter,
                                    mlir::Location loc, mlir::Type iterTy,
@@ -1918,13 +1947,79 @@ bool ClauseProcessor::processMap(
     }
 
     if (iterator) {
-      TODO(currentLocation,
-           "Support for iterator modifiers is not implemented yet");
+      // Iterator in declare mapper context is not yet supported.
+      if (directive == llvm::omp::OMPD_declare_mapper)
+        TODO(currentLocation,
+             "Support for iterator modifiers is not implemented yet");
+
+      llvm::SmallVector<IteratorRange> iteratorRanges;
+      llvm::SmallPtrSet<const Fortran::semantics::Symbol *, 4> ivSyms;
+      collectIteratorIVs(clause, converter, stmtCtx, iteratorRanges, ivSyms);
+
+      mlir::Type ptrTy =
+          mlir::LLVM::LLVMPointerType::get(&converter.getMLIRContext());
+      mlir::Type iterTy =
+          mlir::omp::IteratedType::get(&converter.getMLIRContext(), ptrTy);
+
+      for (const omp::Object &object : objects) {
+        if (hasIteratorIVReference(object, ivSyms)) {
+          mlir::Value iterHandle = buildIteratorOp(
+              converter, clauseLocation, iterTy, iteratorRanges,
+              [&](fir::FirOpBuilder &builder, mlir::Location loc,
+                  llvm::ArrayRef<mlir::Value> /*ivs*/) -> mlir::Value {
+                lower::StatementContext iterStmtCtx;
+                if (std::optional<llvm::SmallVector<mlir::Value>>
+                        loweredIndices = getIteratorElementIndices(
+                            converter, object, iterStmtCtx, loc)) {
+                  const Fortran::semantics::Symbol *sym = object.sym();
+                  assert(sym && "expected symbol for iterator object");
+                  fir::factory::AddrAndBoundsInfo info =
+                      Fortran::lower::getDataOperandBaseAddr(
+                          converter, builder, *sym, loc,
+                          /*unwrapFirBox=*/false);
+                  hlfir::Entity entity{info.addr};
+                  // Use the array base as var_ptr with single-element bounds
+                  // so the runtime can associate this mapping with whole-array
+                  // mappings via the base address.
+                  mlir::Value baseAddr = entity.getBase();
+                  if (auto boxTy = mlir::dyn_cast<fir::BaseBoxType>(
+                          baseAddr.getType()))
+                    baseAddr = fir::BoxAddrOp::create(builder, loc, baseAddr);
+                  llvm::SmallVector<mlir::Value> bounds =
+                      genSingleElementBounds(converter, entity,
+                                             *loweredIndices, loc);
+                  auto ptrLike = llvm::cast<mlir::omp::PointerLikeType>(
+                      baseAddr.getType());
+                  mlir::TypeAttr varType =
+                      mlir::TypeAttr::get(ptrLike.getElementType());
+                  mlir::omp::MapInfoOp mapOp = mlir::omp::MapInfoOp::create(
+                      builder, loc, ptrTy, baseAddr, varType,
+                      builder.getAttr<mlir::omp::ClauseMapFlagsAttr>(
+                          mapTypeBits),
+                      builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
+                          mlir::omp::VariableCaptureKind::ByRef),
+                      /*varPtrPtr=*/mlir::Value{}, /*members=*/{},
+                      /*membersIndex=*/mlir::ArrayAttr{}, bounds,
+                      /*mapperId=*/mlir::FlatSymbolRefAttr{},
+                      builder.getStringAttr(""), builder.getBoolAttr(false));
+                  return mapOp.getResult();
+                }
+                TODO(loc, "object type not supported by iterator modifier");
+              });
+          result.mapIterated.push_back(iterHandle);
+        } else {
+          omp::ObjectList singleObj{object};
+          processMapObjects(stmtCtx, clauseLocation, singleObj, mapTypeBits,
+                            parentMemberIndices, result.mapVars, *ptrMapSyms,
+                            mapperIdName);
+        }
+      }
+    } else {
+      processMapObjects(stmtCtx, clauseLocation,
+                        std::get<omp::ObjectList>(clause.t), mapTypeBits,
+                        parentMemberIndices, result.mapVars, *ptrMapSyms,
+                        mapperIdName);
     }
-    processMapObjects(stmtCtx, clauseLocation,
-                      std::get<omp::ObjectList>(clause.t), mapTypeBits,
-                      parentMemberIndices, result.mapVars, *ptrMapSyms,
-                      mapperIdName);
   };
 
   bool clauseFound = findRepeatableClause<omp::clause::Map>(process);
@@ -1954,13 +2049,76 @@ bool ClauseProcessor::processMotionClauses(lower::StatementContext &stmtCtx,
     std::string mapperIdName = getMapperIdentifier(converter, mapper);
     if (mapperIdName == "__implicit_mapper")
       mapperIdName.clear();
-    if (iterator) {
-      TODO(clauseLocation, "Iterator modifier is not supported yet");
-    }
 
-    processMapObjects(stmtCtx, clauseLocation, objects, mapTypeBits,
-                      parentMemberIndices, result.mapVars, mapSymbols,
-                      mapperIdName, /*isMotionModifier=*/true);
+    if (iterator) {
+      // Iterator modifier present: route each object to iterated or plain path.
+      llvm::SmallVector<IteratorRange> iteratorRanges;
+      llvm::SmallPtrSet<const Fortran::semantics::Symbol *, 4> ivSyms;
+      collectIteratorIVs(clause, converter, stmtCtx, iteratorRanges, ivSyms);
+
+      mlir::Type ptrTy =
+          mlir::LLVM::LLVMPointerType::get(&converter.getMLIRContext());
+      mlir::Type iterTy =
+          mlir::omp::IteratedType::get(&converter.getMLIRContext(), ptrTy);
+
+      for (const omp::Object &object : objects) {
+        if (hasIteratorIVReference(object, ivSyms)) {
+          mlir::Value iterHandle = buildIteratorOp(
+              converter, clauseLocation, iterTy, iteratorRanges,
+              [&](fir::FirOpBuilder &builder, mlir::Location loc,
+                  llvm::ArrayRef<mlir::Value> /*ivs*/) -> mlir::Value {
+                lower::StatementContext iterStmtCtx;
+                if (std::optional<llvm::SmallVector<mlir::Value>>
+                        loweredIndices = getIteratorElementIndices(
+                            converter, object, iterStmtCtx, loc)) {
+                  const Fortran::semantics::Symbol *sym = object.sym();
+                  assert(sym && "expected symbol for iterator object");
+                  fir::factory::AddrAndBoundsInfo info =
+                      Fortran::lower::getDataOperandBaseAddr(
+                          converter, builder, *sym, loc,
+                          /*unwrapFirBox=*/false);
+                  hlfir::Entity entity{info.addr};
+                  // Use the array base as var_ptr with single-element bounds
+                  // so the runtime can associate this mapping with whole-array
+                  // mappings via the base address.
+                  mlir::Value baseAddr = entity.getBase();
+                  if (auto boxTy = mlir::dyn_cast<fir::BaseBoxType>(
+                          baseAddr.getType()))
+                    baseAddr = fir::BoxAddrOp::create(builder, loc, baseAddr);
+                  llvm::SmallVector<mlir::Value> bounds =
+                      genSingleElementBounds(converter, entity,
+                                             *loweredIndices, loc);
+                  auto ptrLike = llvm::cast<mlir::omp::PointerLikeType>(
+                      baseAddr.getType());
+                  mlir::TypeAttr varType =
+                      mlir::TypeAttr::get(ptrLike.getElementType());
+                  mlir::omp::MapInfoOp mapOp = mlir::omp::MapInfoOp::create(
+                      builder, loc, ptrTy, baseAddr, varType,
+                      builder.getAttr<mlir::omp::ClauseMapFlagsAttr>(
+                          mapTypeBits),
+                      builder.getAttr<mlir::omp::VariableCaptureKindAttr>(
+                          mlir::omp::VariableCaptureKind::ByRef),
+                      /*varPtrPtr=*/mlir::Value{}, /*members=*/{},
+                      /*membersIndex=*/mlir::ArrayAttr{}, bounds,
+                      /*mapperId=*/mlir::FlatSymbolRefAttr{},
+                      builder.getStringAttr(""), builder.getBoolAttr(false));
+                  return mapOp.getResult();
+                }
+                TODO(loc, "object type not supported by iterator modifier");
+              });
+          result.mapIterated.push_back(iterHandle);
+        } else {
+          omp::ObjectList singleObj{object};
+          processMapObjects(stmtCtx, clauseLocation, singleObj, mapTypeBits,
+                            parentMemberIndices, result.mapVars, mapSymbols,
+                            mapperIdName, /*isMotionModifier=*/true);
+        }
+      }
+    } else {
+      processMapObjects(stmtCtx, clauseLocation, objects, mapTypeBits,
+                        parentMemberIndices, result.mapVars, mapSymbols,
+                        mapperIdName, /*isMotionModifier=*/true);
+    }
   };
 
   bool clauseFound = findRepeatableClause<omp::clause::To>(callbackFn);
