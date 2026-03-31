@@ -52,6 +52,7 @@
 #include "mlir/Support/StateStack.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Frontend/OpenMP/OMPContext.h"
 
 using namespace Fortran::lower::omp;
 using namespace Fortran::common::openmp;
@@ -4285,11 +4286,317 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
   // support the case of threadprivate variable declared in module.
 }
 
+/// Map a Flang parse-tree OmpTraitSetSelectorName to the corresponding
+/// llvm::omp::TraitSet enum.
+static llvm::omp::TraitSet
+mapTraitSet(parser::OmpTraitSetSelectorName::Value flangSet) {
+  switch (flangSet) {
+  case parser::OmpTraitSetSelectorName::Value::Construct:
+    return llvm::omp::TraitSet::construct;
+  case parser::OmpTraitSetSelectorName::Value::Device:
+    return llvm::omp::TraitSet::device;
+  case parser::OmpTraitSetSelectorName::Value::Implementation:
+    return llvm::omp::TraitSet::implementation;
+  case parser::OmpTraitSetSelectorName::Value::User:
+    return llvm::omp::TraitSet::user;
+  case parser::OmpTraitSetSelectorName::Value::Target_Device:
+    return llvm::omp::TraitSet::target_device;
+  }
+  llvm_unreachable("unknown trait set");
+}
+
+/// Map a Flang parse-tree OmpTraitSelectorName to the corresponding
+/// llvm::omp::TraitSelector enum.
+static llvm::omp::TraitSelector
+mapTraitSelector(const parser::OmpTraitSelectorName &name,
+                 llvm::omp::TraitSet set) {
+  if (const auto *val =
+          std::get_if<parser::OmpTraitSelectorName::Value>(&name.u)) {
+    switch (*val) {
+    case parser::OmpTraitSelectorName::Value::Kind:
+      if (set == llvm::omp::TraitSet::target_device)
+        return llvm::omp::TraitSelector::target_device_kind;
+      return llvm::omp::TraitSelector::device_kind;
+    case parser::OmpTraitSelectorName::Value::Arch:
+      if (set == llvm::omp::TraitSet::target_device)
+        return llvm::omp::TraitSelector::target_device_arch;
+      return llvm::omp::TraitSelector::device_arch;
+    case parser::OmpTraitSelectorName::Value::Isa:
+      if (set == llvm::omp::TraitSet::target_device)
+        return llvm::omp::TraitSelector::target_device_isa;
+      return llvm::omp::TraitSelector::device_isa;
+    case parser::OmpTraitSelectorName::Value::Vendor:
+      return llvm::omp::TraitSelector::implementation_vendor;
+    case parser::OmpTraitSelectorName::Value::Extension:
+      return llvm::omp::TraitSelector::implementation_extension;
+    case parser::OmpTraitSelectorName::Value::Condition:
+      return llvm::omp::TraitSelector::user_condition;
+    case parser::OmpTraitSelectorName::Value::Atomic_Default_Mem_Order:
+    case parser::OmpTraitSelectorName::Value::Requires:
+    case parser::OmpTraitSelectorName::Value::Simd:
+    case parser::OmpTraitSelectorName::Value::Device_Num:
+    case parser::OmpTraitSelectorName::Value::Uid:
+      break;
+    }
+  }
+  // Construct traits, extension strings, and remaining selectors use
+  // string-based lookup.
+  return llvm::omp::getOpenMPContextTraitSelectorKind(name.ToString(), set);
+}
+
+/// Populate a VariantMatchInfo from Flang's parse-tree context selector.
+/// For user conditions, attempts constant folding. Non-constant conditions
+/// are recorded as user_condition_unknown and the expression pointer is
+/// returned via \p dynamicCondExpr for later use in fir.if lowering.
+static void
+makeVariantMatchInfo(llvm::omp::VariantMatchInfo &vmi,
+                     const parser::modifier::OmpContextSelector &ctxSel,
+                     semantics::SemanticsContext &semaCtx,
+                     const parser::ScalarExpr *&dynamicCondExpr) {
+  dynamicCondExpr = nullptr;
+
+  for (const auto &traitSet : ctxSel.v) {
+    using TSSName = parser::OmpTraitSetSelectorName;
+    auto setName = std::get<TSSName>(traitSet.t).v;
+    llvm::omp::TraitSet set = mapTraitSet(setName);
+
+    for (const auto &trait :
+         std::get<std::list<parser::OmpTraitSelector>>(traitSet.t)) {
+      const auto &selectorName =
+          std::get<parser::OmpTraitSelectorName>(trait.t);
+      llvm::omp::TraitSelector selector = mapTraitSelector(selectorName, set);
+
+      // Handle user conditions specially.
+      if (selector == llvm::omp::TraitSelector::user_condition) {
+        auto &props =
+            std::get<std::optional<parser::OmpTraitSelector::Properties>>(
+                trait.t);
+        if (props) {
+          for (const auto &prop :
+               std::get<std::list<parser::OmpTraitProperty>>(props->t)) {
+            if (const auto *scalarExpr =
+                    std::get_if<parser::ScalarExpr>(&prop.u)) {
+              if (const auto *typedExpr =
+                      semantics::GetExpr(semaCtx, *scalarExpr)) {
+                auto foldedExpr =
+                    Fortran::evaluate::Fold(semaCtx.foldingContext(),
+                                            Fortran::common::Clone(*typedExpr));
+                // Try integer constant.
+                if (auto constVal = Fortran::evaluate::ToInt64(foldedExpr)) {
+                  vmi.addTrait(
+                      *constVal != 0
+                          ? llvm::omp::TraitProperty::user_condition_true
+                          : llvm::omp::TraitProperty::user_condition_false,
+                      "<condition>");
+                  continue;
+                }
+                // Try logical constant (.true. / .false.).
+                if (auto logicalVal = Fortran::evaluate::GetScalarConstantValue<
+                        Fortran::evaluate::LogicalResult>(foldedExpr)) {
+                  vmi.addTrait(
+                      logicalVal->IsTrue()
+                          ? llvm::omp::TraitProperty::user_condition_true
+                          : llvm::omp::TraitProperty::user_condition_false,
+                      "<condition>");
+                  continue;
+                }
+              }
+              // Non-constant condition: mark as dynamic.
+              dynamicCondExpr = scalarExpr;
+              vmi.addTrait(llvm::omp::TraitProperty::user_condition_unknown,
+                           "<condition>");
+            }
+          }
+        }
+        continue;
+      }
+
+      // Handle score if present.
+      auto &props =
+          std::get<std::optional<parser::OmpTraitSelector::Properties>>(
+              trait.t);
+      std::optional<llvm::APInt> score;
+      llvm::APInt *scorePtr = nullptr;
+      if (props) {
+        const auto &optScore =
+            std::get<std::optional<parser::OmpTraitScore>>(props->t);
+        if (optScore) {
+          if (const auto *typedExpr =
+                  semantics::GetExpr(semaCtx, optScore->v)) {
+            if (auto constVal = Fortran::evaluate::ToInt64(*typedExpr)) {
+              score = llvm::APInt(64, *constVal);
+              scorePtr = &*score;
+            }
+          }
+        }
+      }
+
+      // Collect properties.
+      if (props) {
+        for (const auto &prop :
+             std::get<std::list<parser::OmpTraitProperty>>(props->t)) {
+          if (const auto *name =
+                  std::get_if<parser::OmpTraitPropertyName>(&prop.u)) {
+            llvm::omp::TraitProperty propKind =
+                llvm::omp::getOpenMPContextTraitPropertyKind(set, selector,
+                                                             name->v);
+            if (propKind != llvm::omp::TraitProperty::invalid) {
+              vmi.addTrait(set, propKind, name->v, scorePtr);
+            } else {
+              // Unknown property, add as ISA-like raw string.
+              vmi.addTrait(set, llvm::omp::TraitProperty::device_isa___ANY,
+                           name->v, scorePtr);
+            }
+          }
+        }
+      } else if (set == llvm::omp::TraitSet::construct) {
+        // Construct traits with no properties: the selector is the property.
+        llvm::omp::TraitProperty propKind =
+            llvm::omp::getOpenMPContextTraitPropertyForSelector(selector);
+        if (propKind != llvm::omp::TraitProperty::invalid)
+          vmi.addTrait(set, propKind, selectorName.ToString(), scorePtr);
+      }
+    }
+  }
+}
+
 static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
                    semantics::SemanticsContext &semaCtx,
                    lower::pft::Evaluation &eval,
                    const parser::OmpMetadirectiveDirective &meta) {
-  TODO(converter.getCurrentLocation(), "METADIRECTIVE");
+  const auto &dirSpec = meta.v;
+  const parser::OmpClauseList &clauseList = dirSpec.Clauses();
+
+  // Represents a candidate directive variant from a WHEN or OTHERWISE clause.
+  struct Candidate {
+    const parser::OmpDirectiveSpecification *dirSpec = nullptr;
+    bool isNothing = false;
+  };
+
+  fir::FirOpBuilder &builder = converter.getFirOpBuilder();
+  auto offloadMod =
+      llvm::cast<mlir::omp::OffloadModuleInterface>(*converter.getModuleOp());
+  bool isDeviceCompilation = offloadMod.getIsTargetDevice();
+  llvm::Triple targetTriple = fir::getTargetTriple(builder.getModule());
+  llvm::omp::OMPContext ompCtx(isDeviceCompilation, targetTriple,
+                               llvm::Triple(), /*DeviceNum=*/-1);
+
+  llvm::SmallVector<Candidate> candidates;
+  llvm::SmallVector<llvm::omp::VariantMatchInfo, 4> vmis;
+  Candidate fallback;
+  fallback.isNothing = true;
+
+  // Set the fallback from a directive specification (shared by
+  // OTHERWISE and DEFAULT clauses).
+  auto setFallback = [&](const parser::OmpDirectiveSpecification &spec) {
+    if (spec.DirId() == llvm::omp::Directive::OMPD_nothing) {
+      fallback.isNothing = true;
+    } else {
+      fallback.dirSpec = &spec;
+      fallback.isNothing = false;
+    }
+  };
+
+  for (const auto &clause : clauseList.v) {
+    if (const auto *whenClause =
+            std::get_if<parser::OmpClause::When>(&clause.u)) {
+      const auto &when = whenClause->v;
+
+      // Extract context selector from modifier.
+      const parser::modifier::OmpContextSelector *ctxSel = nullptr;
+      const auto &modifiers = std::get<0>(when.t);
+      if (modifiers) {
+        for (const auto &mod : *modifiers) {
+          ctxSel = std::get_if<parser::modifier::OmpContextSelector>(&mod.u);
+          if (ctxSel)
+            break;
+        }
+      }
+
+      const auto &dirSpecOpt = std::get<1>(when.t);
+
+      Candidate cand;
+      if (!dirSpecOpt ||
+          dirSpecOpt->value().DirId() ==
+              llvm::omp::Directive::OMPD_nothing) {
+        cand.isNothing = true;
+      } else {
+        cand.dirSpec = &dirSpecOpt->value();
+      }
+
+      if (!ctxSel) {
+        // No context selector — always matches.
+        candidates.push_back(cand);
+        vmis.emplace_back();
+        continue;
+      }
+
+      // Build VariantMatchInfo from the parse-tree context selector.
+      llvm::omp::VariantMatchInfo vmi;
+      const parser::ScalarExpr *dynCondExpr = nullptr;
+      makeVariantMatchInfo(vmi, *ctxSel, semaCtx, dynCondExpr);
+
+      // Skip dynamic candidates — handled in a later patch.
+      if (dynCondExpr)
+        continue;
+
+      // Static evaluation using the OMPContext infrastructure.
+      if (!llvm::omp::isVariantApplicableInContext(vmi, ompCtx))
+        continue; // Statically doesn't match, skip.
+
+      candidates.push_back(cand);
+      vmis.push_back(vmi);
+    } else if (const auto *otherwiseClause =
+                   std::get_if<parser::OmpClause::Otherwise>(&clause.u)) {
+      if (otherwiseClause->v && otherwiseClause->v->v)
+        setFallback(otherwiseClause->v->v->value());
+    } else if (const auto *defaultClause =
+                   std::get_if<parser::OmpClause::Default>(&clause.u)) {
+      // DEFAULT(directive-spec) is OpenMP 5.0 syntax for OTHERWISE.
+      if (const auto *dirSpecPtr = std::get_if<
+              common::Indirection<parser::OmpDirectiveSpecification>>(
+              &defaultClause->v.u))
+        setFallback(dirSpecPtr->value());
+    }
+  }
+
+  auto lowerDirectiveVariant =
+      [&](const parser::OmpDirectiveSpecification &spec) {
+        List<Clause> variantClauses = makeClauses(spec.Clauses(), semaCtx);
+        mlir::Location variantLoc = converter.genLocation(spec.source);
+
+        ConstructQueue queue{buildConstructQueue(
+            converter.getFirOpBuilder().getModule(), semaCtx, eval, spec.source,
+            spec.DirId(), variantClauses)};
+
+        genOMPDispatch(converter, symTable, semaCtx, eval, variantLoc, queue,
+                       queue.begin());
+      };
+
+  auto lowerCandidate = [&](const Candidate &cand) {
+    if (cand.isNothing)
+      genNestedEvaluations(converter, eval);
+    else if (cand.dirSpec)
+      lowerDirectiveVariant(*cand.dirSpec);
+  };
+
+  // All candidates are statically matched — use scoring to pick the best.
+  if (candidates.empty()) {
+    lowerCandidate(fallback);
+    return;
+  }
+  if (candidates.size() == 1) {
+    lowerCandidate(candidates.front());
+    return;
+  }
+  int bestIdx =
+      llvm::omp::getBestVariantMatchForContext(vmis, ompCtx);
+  if (bestIdx >= 0 &&
+      static_cast<size_t>(bestIdx) < candidates.size()) {
+    lowerCandidate(candidates[bestIdx]);
+  } else {
+    lowerCandidate(fallback);
+  }
 }
 
 static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
