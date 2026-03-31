@@ -4574,6 +4574,34 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
     }
   }
 
+  // For metadirective variants that are loop-associated (e.g., parallel do,
+  // parallel loop), the associated DO loop is a sibling evaluation in the PFT
+  // rather than a nested child. Move it into the metadirective eval's
+  // evaluationList so that loop-lowering functions can find it via
+  // getNestedDoConstruct().
+  bool loopSpliced = false;
+  auto ensureLoopEval = [&]() {
+    if (loopSpliced || eval.hasNestedEvaluations())
+      return;
+    auto *parentList = eval.parentConstruct
+                           ? eval.parentConstruct->evaluationList.get()
+                           : &eval.getOwningProcedure()->evaluationList;
+    auto metaIt = llvm::find_if(
+        *parentList, [&](lower::pft::Evaluation &e) { return &e == &eval; });
+    assert(metaIt != parentList->end() &&
+           "metadirective eval not found in parent list");
+    auto loopIt = std::find_if(
+        std::next(metaIt), parentList->end(),
+        [](lower::pft::Evaluation &e) {
+          return e.getIf<parser::DoConstruct>();
+        });
+    if (loopIt != parentList->end()) {
+      eval.evaluationList->splice(eval.evaluationList->end(),
+                                  *parentList, loopIt);
+      loopSpliced = true;
+    }
+  };
+
   auto lowerDirectiveVariant =
       [&](const parser::OmpDirectiveSpecification &spec) {
         List<Clause> variantClauses = makeClauses(spec.Clauses(), semaCtx);
@@ -4582,6 +4610,14 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
         ConstructQueue queue{buildConstructQueue(
             converter.getFirOpBuilder().getModule(), semaCtx, eval, spec.source,
             spec.DirId(), variantClauses)};
+
+        // If this variant has a loop-associated leaf, ensure the sibling
+        // DoConstruct has been moved into the metadirective's eval.
+        if (llvm::any_of(queue, [](const auto &item) {
+              return llvm::omp::getDirectiveAssociation(item.id) ==
+                     llvm::omp::Association::LoopNest;
+            }))
+          ensureLoopEval();
 
         genOMPDispatch(converter, symTable, semaCtx, eval, variantLoc, queue,
                        queue.begin());
