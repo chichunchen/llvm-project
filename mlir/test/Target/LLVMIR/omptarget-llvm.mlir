@@ -27,7 +27,7 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_6]], align 8
 // CHECK:         %[[VAL_7:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_7]], align 8
-// CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_8]], align 8
 // CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_10:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
@@ -75,7 +75,7 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[ARR_DATA]], ptr %[[VAL_5]], align 8
 // CHECK:         %[[VAL_6:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[ARR_OFFSET]], ptr %[[VAL_6]], align 8
-// CHECK:         %[[VAL_7:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_7:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_7]], align 8
 // CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
@@ -167,13 +167,13 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_16]], ptr %[[VAL_15]], align 8
 // CHECK:         %[[VAL_17:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_4]], i32 0, i32 0
 // CHECK:         store ptr %[[ARR_OFFSET1]], ptr %[[VAL_17]], align 8
-// CHECK:         %[[VAL_18:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_5]], i64 0, i64 0
+// CHECK:         %[[VAL_18:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_5]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_18]], align 8
 // CHECK:         %[[VAL_19:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_3]], i32 0, i32 1
 // CHECK:         store ptr %[[VAL_20]], ptr %[[VAL_19]], align 8
 // CHECK:         %[[VAL_21:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_4]], i32 0, i32 1
 // CHECK:         store ptr %[[ARR_OFFSET2]], ptr %[[VAL_21]], align 8
-// CHECK:         %[[VAL_22:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_5]], i64 0, i64 1
+// CHECK:         %[[VAL_22:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_5]], {{i(32|64)}} 0, {{i(32|64)}} 1
 // CHECK:         store ptr null, ptr %[[VAL_22]], align 8
 // CHECK:         %[[VAL_23:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_3]], i32 0, i32 0
 // CHECK:         %[[VAL_24:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_4]], i32 0, i32 0
@@ -194,13 +194,13 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_16]], ptr %[[VAL_31]], align 8
 // CHECK:         %[[VAL_32:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[ARR_OFFSET3]], ptr %[[VAL_32]], align 8
-// CHECK:         %[[VAL_33:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_33:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_33]], align 8
 // CHECK:         %[[VAL_34:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_0]], i32 0, i32 1
 // CHECK:         store ptr %[[VAL_20]], ptr %[[VAL_34]], align 8
 // CHECK:         %[[VAL_35:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 1
 // CHECK:         store ptr %[[ARR_OFFSET4]], ptr %[[VAL_35]], align 8
-// CHECK:         %[[VAL_36:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], i64 0, i64 1
+// CHECK:         %[[VAL_36:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 1
 // CHECK:         store ptr null, ptr %[[VAL_36]], align 8
 // CHECK:         %[[VAL_37:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_38:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 0
@@ -243,7 +243,7 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_4]], ptr %[[VAL_7]], align 8
 // CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[VAL_4]], ptr %[[VAL_8]], align 8
-// CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_9]], align 8
 // CHECK:         %[[VAL_10:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_11:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
@@ -288,7 +288,7 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_6]], align 8
 // CHECK:         %[[VAL_7:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_7]], align 8
-// CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_8]], align 8
 // CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_10:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
@@ -331,7 +331,7 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_6]], align 8
 // CHECK:         %[[VAL_7:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_7]], align 8
-// CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_8]], align 8
 // CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_10:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
@@ -380,13 +380,13 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_4]], ptr %[[VAL_7]], align 8
 // CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[VAL_4]], ptr %[[VAL_8]], align 8
-// CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_9]], align 8
 // CHECK:         %[[VAL_10:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_0]], i32 0, i32 1
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_10]], align 8
 // CHECK:         %[[VAL_11:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 1
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_11]], align 8
-// CHECK:         %[[VAL_12:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], i64 0, i64 1
+// CHECK:         %[[VAL_12:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 1
 // CHECK:         store ptr null, ptr %[[VAL_12]], align 8
 // CHECK:         %[[VAL_13:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_14:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 0
@@ -441,13 +441,13 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_4]], ptr %[[VAL_8]], align 8
 // CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[VAL_4]], ptr %[[VAL_9]], align 8
-// CHECK:         %[[VAL_10:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_10:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[VAL_10]], align 8
 // CHECK:         %[[VAL_11:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_0]], i32 0, i32 1
 // CHECK:         store ptr %[[VAL_5]], ptr %[[VAL_11]], align 8
 // CHECK:         %[[VAL_12:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 1
 // CHECK:         store ptr %[[VAL_5]], ptr %[[VAL_12]], align 8
-// CHECK:         %[[VAL_13:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], i64 0, i64 1
+// CHECK:         %[[VAL_13:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 1
 // CHECK:         store ptr null, ptr %[[VAL_13]], align 8
 // CHECK:         %[[VAL_14:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_15:.*]] = getelementptr inbounds [2 x ptr], ptr %[[VAL_1]], i32 0, i32 0
@@ -498,7 +498,7 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[INT_ALLOCA]], ptr %[[BASEPTRS_VAL]], align 8
 // CHECK:         %[[PTRS_VAL:.*]] = getelementptr inbounds [1 x ptr], ptr %[[OFFLOAD_PTRS]], i32 0, i32 0
 // CHECK:         store ptr %[[INT_ALLOCA]], ptr %[[PTRS_VAL]], align 8
-// CHECK:         %[[MAPPERS_VAL:.*]] = getelementptr inbounds [1 x ptr], ptr %[[OFFLOAD_MAPPERS]], i64 0, i64 0
+// CHECK:         %[[MAPPERS_VAL:.*]] = getelementptr inbounds [1 x ptr], ptr %[[OFFLOAD_MAPPERS]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr null, ptr %[[MAPPERS_VAL]], align 8
 // CHECK:         %[[BASEPTRS_VAL_2:.*]] = getelementptr inbounds [1 x ptr], ptr %[[OFFLOAD_BASEPTRS]], i32 0, i32 0
 // CHECK:         %[[PTRS_VAL_2:.*]] = getelementptr inbounds [1 x ptr], ptr %[[OFFLOAD_PTRS]], i32 0, i32 0
@@ -545,7 +545,7 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_7]], align 8
 // CHECK:         %[[VAL_8:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
 // CHECK:         store ptr %[[VAL_3]], ptr %[[VAL_8]], align 8
-// CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], i64 0, i64 0
+// CHECK:         %[[VAL_9:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_2]], {{i(32|64)}} 0, {{i(32|64)}} 0
 // CHECK:         store ptr @.omp_mapper._QQFmy_testmy_mapper, ptr %[[VAL_9]], align 8
 // CHECK:         %[[VAL_10:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_0]], i32 0, i32 0
 // CHECK:         %[[VAL_11:.*]] = getelementptr inbounds [1 x ptr], ptr %[[VAL_1]], i32 0, i32 0
