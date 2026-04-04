@@ -461,14 +461,9 @@ static LogicalResult checkImplementationStatus(Operation &op) {
       .Case([&](omp::SimdOp op) { checkReduction(op, result); })
       .Case<omp::AtomicReadOp, omp::AtomicWriteOp, omp::AtomicUpdateOp,
             omp::AtomicCaptureOp>([&](auto op) { checkHint(op, result); })
-      .Case<omp::TargetEnterDataOp, omp::TargetExitDataOp>([&](auto op) {
-        checkDepend(op, result);
-        checkMapIteratorModifier(op, result);
-      })
-      .Case([&](omp::TargetUpdateOp op) {
-        checkDepend(op, result);
-        checkMapIteratorModifier(op, result);
-      })
+      .Case<omp::TargetEnterDataOp, omp::TargetExitDataOp>(
+          [&](auto op) { checkDepend(op, result); })
+      .Case([&](omp::TargetUpdateOp op) { checkDepend(op, result); })
       .Case([&](omp::TargetOp op) {
         checkAllocate(op, result);
         checkBare(op, result);
@@ -5979,6 +5974,7 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
   llvm::Value *ifCond = nullptr;
   llvm::Value *deviceID = builder.getInt64(llvm::omp::OMP_DEVICEID_UNDEF);
   SmallVector<Value> mapVars;
+  SmallVector<Value> mapIterated;
   SmallVector<Value> useDevicePtrVars;
   SmallVector<Value> useDeviceAddrVars;
   llvm::omp::RuntimeFunction RTLFn;
@@ -6030,6 +6026,8 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
                     ? llvm::omp::OMPRTL___tgt_target_data_begin_nowait_mapper
                     : llvm::omp::OMPRTL___tgt_target_data_begin_mapper;
             mapVars = enterDataOp.getMapVars();
+            mapIterated.assign(enterDataOp.getMapIterated().begin(),
+                               enterDataOp.getMapIterated().end());
             info.HasNoWait = enterDataOp.getNowait();
             return success();
           })
@@ -6047,6 +6045,8 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
                         ? llvm::omp::OMPRTL___tgt_target_data_end_nowait_mapper
                         : llvm::omp::OMPRTL___tgt_target_data_end_mapper;
             mapVars = exitDataOp.getMapVars();
+            mapIterated.assign(exitDataOp.getMapIterated().begin(),
+                               exitDataOp.getMapIterated().end());
             info.HasNoWait = exitDataOp.getNowait();
             return success();
           })
@@ -6065,6 +6065,8 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
                     ? llvm::omp::OMPRTL___tgt_target_data_update_nowait_mapper
                     : llvm::omp::OMPRTL___tgt_target_data_update_mapper;
             mapVars = updateDataOp.getMapVars();
+            mapIterated.assign(updateDataOp.getMapIterated().begin(),
+                               updateDataOp.getMapIterated().end());
             info.HasNoWait = updateDataOp.getNowait();
             return success();
           })
@@ -6083,12 +6085,82 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
 
   // Fill up the arrays with all the mapped variables.
   MapInfosTy combinedInfo;
+
+  llvm::SmallVector<IteratorInfo, 2> iterInfos;
+  llvm::Value *dynamicTripCount = nullptr;
+
+  if (!mapIterated.empty()) {
+    for (auto iter : mapIterated) {
+      auto itersOp = iter.getDefiningOp<omp::IteratorOp>();
+      assert(itersOp && "map_iterated value must be defined by omp.iterator");
+      iterInfos.emplace_back(itersOp, moduleTranslation, builder);
+    }
+    dynamicTripCount = builder.getInt64(0);
+    for (auto &ii : iterInfos)
+      dynamicTripCount =
+          builder.CreateAdd(dynamicTripCount, ii.getTotalTrips());
+  }
+
   auto genMapInfoCB = [&](InsertPointTy codeGenIP) -> MapInfosTy & {
     builder.restoreIP(codeGenIP);
     genMapInfos(builder, moduleTranslation, DL, combinedInfo, mapData,
                 targetDirective);
+    // TotalMapCount = staticTripCount + dynamicTripCount.
+    if (dynamicTripCount) {
+      unsigned staticTripCount = combinedInfo.BasePointers.size();
+      info.TotalMapCount = builder.CreateAdd(builder.getInt64(staticTripCount),
+                                             dynamicTripCount);
+    }
     return combinedInfo;
   };
+
+  auto dynMapEntriesImpl =
+      [&](llvm::OpenMPIRBuilder::InsertPointTy codeGenIP,
+          llvm::OpenMPIRBuilder::TargetDataRTArgs &RTArgs,
+          unsigned StaticCount) -> llvm::OpenMPIRBuilder::InsertPointOrErrorTy {
+    builder.restoreIP(codeGenIP);
+
+    // Fill iterated entries starting at StaticCount.
+    llvm::Value *offset = builder.getInt64(StaticCount);
+    for (auto [i, iterInfo] : llvm::enumerate(iterInfos)) {
+      auto itersOp = mapIterated[i].getDefiningOp<omp::IteratorOp>();
+
+      if (failed(fillIteratorLoop(
+              itersOp, builder, moduleTranslation, iterInfo, "map_iterator",
+              [&](llvm::Value *linearIV, mlir::omp::YieldOp yield) {
+                Value mapInfoVal = yield.getResults()[0];
+
+                SmallVector<Value> singleMapVar = {mapInfoVal};
+                MapInfoData iterMapData;
+                collectMapDataFromMapOperands(iterMapData, singleMapVar,
+                                              moduleTranslation, DL, builder);
+                MapInfosTy iterCombinedInfo;
+                genMapInfos(builder, moduleTranslation, DL, iterCombinedInfo,
+                            iterMapData, targetDirective);
+
+                llvm::Value *idx = builder.CreateAdd(offset, linearIV);
+                llvm::Value *mapType = builder.getInt64(
+                    static_cast<int64_t>(iterCombinedInfo.Types[0]));
+                llvm::Value *mapName = (!iterCombinedInfo.Names.empty() &&
+                                        iterCombinedInfo.Names[0])
+                                           ? iterCombinedInfo.Names[0]
+                                           : nullptr;
+                ompBuilder->emitOffloadingArraysMapEntry(
+                    builder, RTArgs, info, idx,
+                    iterCombinedInfo.BasePointers[0],
+                    iterCombinedInfo.Pointers[0], iterCombinedInfo.Sizes[0],
+                    mapType, /*MapperFunc=*/nullptr, mapName);
+              })))
+        return llvm::make_error<PreviouslyReportedError>();
+
+      offset = builder.CreateAdd(offset, iterInfo.getTotalTrips());
+    }
+    return builder.saveIP();
+  };
+  llvm::OpenMPIRBuilder::DynMapEntriesCallbackTy dynMapEntriesCB =
+      !mapIterated.empty()
+          ? llvm::OpenMPIRBuilder::DynMapEntriesCallbackTy(dynMapEntriesImpl)
+          : nullptr;
 
   // Define a lambda to apply mappings between use_device_addr and
   // use_device_ptr base pointers, and their associated block arguments.
@@ -6197,14 +6269,17 @@ convertOmpTargetData(Operation *op, llvm::IRBuilderBase &builder,
       findAllocaInsertPoint(builder, moduleTranslation);
   llvm::OpenMPIRBuilder::InsertPointOrErrorTy afterIP = [&]() {
     if (isa<omp::TargetDataOp>(op))
-      return ompBuilder->createTargetData(ompLoc, allocaIP, builder.saveIP(),
-                                          deviceID, ifCond, info, genMapInfoCB,
-                                          customMapperCB,
-                                          /*MapperFunc=*/nullptr, bodyGenCB,
-                                          /*DeviceAddrCB=*/nullptr);
-    return ompBuilder->createTargetData(ompLoc, allocaIP, builder.saveIP(),
-                                        deviceID, ifCond, info, genMapInfoCB,
-                                        customMapperCB, &RTLFn);
+      return ompBuilder->createTargetData(
+          ompLoc, allocaIP, builder.saveIP(), deviceID, ifCond, info,
+          genMapInfoCB, customMapperCB,
+          /*MapperFunc=*/nullptr, bodyGenCB,
+          /*DeviceAddrCB=*/nullptr,
+          /*SrcLocInfo=*/nullptr, dynMapEntriesCB);
+    return ompBuilder->createTargetData(
+        ompLoc, allocaIP, builder.saveIP(), deviceID, ifCond, info,
+        genMapInfoCB, customMapperCB, &RTLFn,
+        /*BodyGenCB=*/nullptr, /*DeviceAddrCB=*/nullptr,
+        /*SrcLocInfo=*/nullptr, dynMapEntriesCB);
   }();
 
   if (failed(handleError(afterIP, *op)))
