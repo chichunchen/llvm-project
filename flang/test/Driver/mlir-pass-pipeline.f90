@@ -138,6 +138,7 @@ end program
 ! ALL-NEXT:      StackReclaim
 ! ALL-NEXT:      CFGConversion
 ! ALL-NEXT:    'func.func' Pipeline
+! O2-NEXT:       FPReductionReassoc
 ! ALL-NEXT:      StackReclaim
 ! ALL-NEXT:      CFGConversion
 ! ALL-NEXT:   'omp.declare_mapper' Pipeline

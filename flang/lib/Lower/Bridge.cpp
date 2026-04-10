@@ -7438,7 +7438,12 @@ Fortran::lower::LoweringBridge::LoweringBridge(
   assert(*module && "module was not created");
   fir::setTargetTriple(*module, triple);
   fir::setKindMapping(*module, kindMap);
-  fir::setTargetCPU(*module, targetMachine.getTargetCPU());
+  // Use the user-requested CPU string (targetOpts.cpu) rather than the target
+  // machine's resolved CPU name.  When no -mcpu flag is given, targetOpts.cpu
+  // is empty and setTargetCPU is a no-op, so we avoid stamping every function
+  // with "target-cpu"="x86-64" (or equivalent baseline) which would prevent
+  // the LLVM backend from using vector ISA extensions available on the host.
+  fir::setTargetCPU(*module, targetOpts.cpu);
   fir::setTuneCPU(*module, targetOpts.cpuToTuneFor);
   fir::setAtomicIgnoreDenormalMode(*module,
                                    targetOpts.atomicIgnoreDenormalMode);

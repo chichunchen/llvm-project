@@ -399,6 +399,24 @@ def LoopVersioning : Pass<"loop-versioning", "mlir::func::FuncOp"> {
   let dependentDialects = [ "fir::FIROpsDialect", "mlir::DLTIDialect" ];
 }
 
+def FPReductionReassoc : Pass<"fp-reduction-reassoc", "mlir::func::FuncOp"> {
+  let summary =
+      "Add reassoc fast-math flag to scalar FP reduction accumulations";
+  let description = [{
+    Identifies scalar floating-point reduction patterns inside fir.do_loop
+    operations (e.g. Q = Q + Z(k)*X(k)) and sets the 'reassoc' fast-math flag
+    on the accumulation operation (arith.addf) and any directly-feeding
+    multiply (arith.mulf).
+
+    Adding 'reassoc' lets LLVM's loop vectorizer break the loop-carried FP
+    dependency by using multiple independent partial-sum accumulators, which
+    enables auto-vectorization of dot-product and similar Fortran reduction
+    loops.  The transformation is semantically valid for Fortran: the standard
+    does not mandate a specific accumulation order for such reductions.
+  }];
+  let dependentDialects = ["fir::FIROpsDialect", "mlir::arith::ArithDialect"];
+}
+
 def VScaleAttr : Pass<"vscale-attr", "mlir::func::FuncOp"> {
   let summary = "Add vscale_range attribute to functions";
   let description = [{

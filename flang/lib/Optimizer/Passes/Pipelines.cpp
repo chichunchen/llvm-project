@@ -238,6 +238,12 @@ void createDefaultFIROptimizerPassPipeline(mlir::PassManager &pm,
   pm.addPass(fir::createSimplifyFIROperations(
       {/*preferInlineImplementation=*/pc.OptLevel.isOptimizingForSpeed()}));
 
+  // Mark scalar FP reduction accumulations with 'reassoc' so that LLVM's
+  // loop vectorizer can use multiple independent partial-sum accumulators
+  // (e.g. for DO-loop dot-product patterns like Q = Q + Z(k)*X(k)).
+  if (pc.OptLevel.isOptimizingForSpeed())
+    pm.addPass(fir::createFPReductionReassoc());
+
   addNestedPassToAllTopLevelOperations<PassConstructor>(
       pm, fir::createStackReclaim);
   // convert control flow to CFG form

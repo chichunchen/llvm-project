@@ -126,6 +126,7 @@ func.func @_QQmain() {
 // PASSES-NEXT:   StackReclaim
 // PASSES-NEXT:   CFGConversion
 // PASSES-NEXT: 'func.func' Pipeline
+// PASSES-NEXT:   FPReductionReassoc
 // PASSES-NEXT:   StackReclaim
 // PASSES-NEXT:   CFGConversion
 // PASSES-NEXT:  'omp.declare_mapper' Pipeline

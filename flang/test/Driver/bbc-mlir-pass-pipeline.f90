@@ -59,6 +59,7 @@ end program
 ! CHECK-NEXT:   StackReclaim
 ! CHECK-NEXT:   CFGConversion
 ! CHECK-NEXT: 'func.func' Pipeline
+! CHECK-NEXT:   FPReductionReassoc
 ! CHECK-NEXT:   StackReclaim
 ! CHECK-NEXT:   CFGConversion
 ! CHECK-NEXT: 'omp.declare_mapper' Pipeline

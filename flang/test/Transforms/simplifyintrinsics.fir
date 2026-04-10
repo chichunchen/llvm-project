@@ -505,8 +505,8 @@ func.func @dot_f32(%arg0: !fir.box<!fir.array<?xf32>> {fir.bindc_name = "a"}, %a
 // CHECK:             %[[BLOC:.*]] = fir.coordinate_of %[[BCAST]], %[[IDX]] : (!fir.box<!fir.array<?xf32>>, index) -> !fir.ref<f32>
 // CHECK:             %[[BVAL:.*]] = fir.load %[[BLOC]] : !fir.ref<f32>
 // CHECK:             %[[BVALCAST:.*]] = fir.convert %[[BVAL]] : (f32) -> f32
-// CHECK:             %[[MUL:.*]] = arith.mulf %[[AVALCAST]], %[[BVALCAST]] : f32
-// CHECK:             %[[NEWSUM:.*]] = arith.addf %[[MUL]], %[[SUM]] : f32
+// CHECK:             %[[MUL:.*]] = arith.mulf %[[AVALCAST]], %[[BVALCAST]] fastmath<reassoc,contract> : f32
+// CHECK:             %[[NEWSUM:.*]] = arith.addf %[[MUL]], %[[SUM]] fastmath<reassoc,contract> : f32
 // CHECK:             fir.result %[[NEWSUM]] : f32
 // CHECK:           }
 // CHECK:           return %[[RES]] : f32
@@ -783,8 +783,8 @@ fir.global linkonce @_QQclX2E2F646F742E66393000 constant : !fir.char<1,10> {
 // CHECK:             %[[BLOC:.*]] = fir.coordinate_of %[[BCAST]], %[[IDX]] : (!fir.box<!fir.array<?xf32>>, index) -> !fir.ref<f32>
 // CHECK:             %[[BVAL:.*]] = fir.load %[[BLOC]] : !fir.ref<f32>
 // CHECK:             %[[BVALCAST:.*]] = fir.convert %[[BVAL]] : (f32) -> f64
-// CHECK:             %[[MUL:.*]] = arith.mulf %[[AVALCAST]], %[[BVALCAST]] : f64
-// CHECK:             %[[NEWSUM:.*]] = arith.addf %[[MUL]], %[[SUM]] : f64
+// CHECK:             %[[MUL:.*]] = arith.mulf %[[AVALCAST]], %[[BVALCAST]] fastmath<reassoc,contract> : f64
+// CHECK:             %[[NEWSUM:.*]] = arith.addf %[[MUL]], %[[SUM]] fastmath<reassoc,contract> : f64
 // CHECK:             fir.result %[[NEWSUM]] : f64
 // CHECK:           }
 // CHECK:           return %[[RES]] : f64

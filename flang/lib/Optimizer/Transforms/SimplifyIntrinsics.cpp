@@ -974,11 +974,19 @@ static void genRuntimeDotBody(fir::FirOpBuilder &builder,
   // Convert to the result type.
   elem2 = fir::ConvertOp::create(builder, loc, resultElementType, elem2);
 
-  if (mlir::isa<mlir::FloatType>(resultElementType))
-    sumVal = mlir::arith::AddFOp::create(
-        builder, loc, mlir::arith::MulFOp::create(builder, loc, elem1, elem2),
-        sumVal);
-  else if (mlir::isa<mlir::IntegerType>(resultElementType))
+  if (mlir::isa<mlir::FloatType>(resultElementType)) {
+    // DOT_PRODUCT is a mathematical reduction: the order of summation is not
+    // mandated by the Fortran standard, so we apply contract+reassoc to let
+    // the LLVM loop vectorizer use multiple independent accumulators.
+    mlir::arith::FastMathFlags fmf = builder.getFastMathFlags() |
+                                     mlir::arith::FastMathFlags::contract |
+                                     mlir::arith::FastMathFlags::reassoc;
+    mlir::arith::FastMathFlagsAttr fmfAttr =
+        mlir::arith::FastMathFlagsAttr::get(builder.getContext(), fmf);
+    auto mulOp =
+        mlir::arith::MulFOp::create(builder, loc, elem1, elem2, fmfAttr);
+    sumVal = mlir::arith::AddFOp::create(builder, loc, mulOp, sumVal, fmfAttr);
+  } else if (mlir::isa<mlir::IntegerType>(resultElementType))
     sumVal = mlir::arith::AddIOp::create(
         builder, loc, mlir::arith::MulIOp::create(builder, loc, elem1, elem2),
         sumVal);

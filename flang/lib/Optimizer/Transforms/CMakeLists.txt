@@ -39,6 +39,7 @@ add_flang_library(FIRTransforms
   SimplifyIntrinsics.cpp
   AddDebugInfo.cpp
   PolymorphicOpConversion.cpp
+  FPReductionReassoc.cpp
   FunctionAttr.cpp
   GenRuntimeCallsForTest.cpp
   LoopInvariantCodeMotion.cpp
