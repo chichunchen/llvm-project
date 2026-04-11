@@ -78,5 +78,7 @@ DisableOption(ExternalNameConversion, "external-name-interop",
               "convert names with external convention");
 EnableOption(ConstantArgumentGlobalisation, "constant-argument-globalisation",
              "the local constant argument to global constant conversion");
+EnableOption(FPReductionReassoc, "fp-reduction-reassoc",
+             "FP reduction reassociation");
 DisableOption(CompilerGeneratedNamesConversion, "compiler-generated-names",
               "replace special symbols in compiler generated names");

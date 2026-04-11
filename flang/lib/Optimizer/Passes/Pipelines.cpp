@@ -202,6 +202,8 @@ void createDefaultFIROptimizerPassPipeline(mlir::PassManager &pm,
     pm.addPass(fir::createAlgebraicSimplificationPass(config));
     if (enableConstantArgumentGlobalisation)
       pm.addPass(fir::createConstantArgumentGlobalisationOpt());
+    if (enableFPReductionReassoc)
+      pm.addPass(fir::createFPReductionReassoc());
   }
 
   if (pc.LoopVersioning)

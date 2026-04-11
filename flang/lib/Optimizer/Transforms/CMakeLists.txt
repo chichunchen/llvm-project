@@ -30,6 +30,7 @@ add_flang_library(FIRTransforms
   ExternalNameConversion.cpp
   FIRToSCF.cpp
   FIRToMemRef.cpp
+  FPReductionReassoc.cpp
   MemoryUtils.cpp
   MemoryAllocation.cpp
   StackArrays.cpp

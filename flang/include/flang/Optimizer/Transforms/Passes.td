@@ -290,6 +290,23 @@ def SimplifyIntrinsics : Pass<"simplify-intrinsics", "mlir::ModuleOp"> {
   ];
 }
 
+def FPReductionReassoc
+    : Pass<"fp-reduction-reassoc", "::mlir::func::FuncOp"> {
+  let summary = "Mark FP loop reductions with fastmath<reassoc>";
+  let description = [{
+    Identifies scalar floating-point reduction patterns inside fir.do_loop
+    and sets the reassoc fast-math flag on the accumulation arith.addf
+    (and optionally the feeding arith.mulf). This enables LLVM's loop
+    vectorizer to use multiple independent partial-sum accumulators.
+
+    The Fortran standard does not mandate a specific accumulation order
+    for such reductions, so reassociation is semantically valid.
+  }];
+  let dependentDialects = [
+    "fir::FIROpsDialect", "mlir::arith::ArithDialect"
+  ];
+}
+
 def MemoryAllocationOpt : Pass<"memory-allocation-opt", "mlir::func::FuncOp"> {
   let summary = "Convert stack to heap allocations and vice versa.";
   let description = [{

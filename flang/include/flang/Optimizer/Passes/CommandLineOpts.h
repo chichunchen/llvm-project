@@ -69,6 +69,7 @@ extern llvm::cl::opt<bool> enableSafeTrampoline;
 
 extern llvm::cl::opt<bool> disableExternalNameConversion;
 extern llvm::cl::opt<bool> enableConstantArgumentGlobalisation;
+extern llvm::cl::opt<bool> enableFPReductionReassoc;
 extern llvm::cl::opt<bool> disableCompilerGeneratedNamesConversion;
 
 #endif // FORTRAN_OPTIMIZER_PASSES_COMMANDLINE_OPTS_H
