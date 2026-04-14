@@ -147,6 +147,7 @@
 #include "llvm/Transforms/Utils/Mem2Reg.h"
 #include "llvm/Transforms/Utils/MoveAutoInit.h"
 #include "llvm/Transforms/Utils/NameAnonGlobals.h"
+#include "llvm/Transforms/Utils/OpenMPSIMDInlineBoost.h"
 #include "llvm/Transforms/Utils/RelLookupTableConverter.h"
 #include "llvm/Transforms/Utils/SimplifyCFGOptions.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
@@ -205,6 +206,10 @@ static cl::opt<bool> RunPartialInlining("enable-partial-inlining",
 static cl::opt<bool> ExtraVectorizerPasses(
     "extra-vectorizer-passes", cl::init(false), cl::Hidden,
     cl::desc("Run cleanup optimization passes after vectorization"));
+
+static cl::opt<bool> EnableOpenMPSIMDInlineBoost(
+    "enable-openmp-simd-inline-boost", cl::init(false), cl::Hidden,
+    cl::desc("Boost inline threshold for calls inside OpenMP SIMD loops"));
 
 static cl::opt<bool> RunNewGVN("enable-newgvn", cl::init(false), cl::Hidden,
                                cl::desc("Run the NewGVN pass"));
@@ -1290,6 +1295,11 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   if (PGOOpt && (PGOOpt->Action == PGOOptions::IRUse ||
                  PGOOpt->Action == PGOOptions::SampleUse))
     MPM.addPass(PGOForceFunctionAttrsPass(PGOOpt->ColdOptType));
+
+  // Boost inline thresholds for calls inside OpenMP SIMD loops so the inliner
+  // aggressively inlines them, enabling LoopVectorize to vectorize the body.
+  if (EnableOpenMPSIMDInlineBoost)
+    MPM.addPass(createModuleToFunctionPassAdaptor(OpenMPSIMDInlineBoost()));
 
   MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
 
