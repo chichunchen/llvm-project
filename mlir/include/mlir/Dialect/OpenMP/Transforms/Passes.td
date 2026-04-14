@@ -34,4 +34,17 @@ def PrepareForOMPOffloadPrivatizationPass : Pass<"omp-offload-privatization-prep
     }];
   let dependentDialects = ["LLVM::LLVMDialect"];
 }
+
+def OpenMPSIMDInlineBoostPass
+    : Pass<"omp-simd-inline-boost", "ModuleOp"> {
+  let summary = "Boost inline threshold for calls inside OpenMP SIMD loops";
+  let description = [{
+    Marks function calls inside omp.simd regions with a discardable attribute
+    (omp.simd_inline_boost) so that the FIR-to-LLVM conversion can set
+    "function-inline-threshold" on the resulting llvm.call. This enables
+    aggressive inlining of scalar function calls inside SIMD loops, allowing
+    LoopVectorize to vectorize the inlined loop body.
+  }];
+  let dependentDialects = ["mlir::omp::OpenMPDialect"];
+}
 #endif // MLIR_DIALECT_OPENMP_TRANSFORMS_PASSES

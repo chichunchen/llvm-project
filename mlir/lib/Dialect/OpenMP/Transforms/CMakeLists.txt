@@ -1,6 +1,7 @@
 add_mlir_dialect_library(MLIROpenMPTransforms
   MarkDeclareTarget.cpp
   OpenMPOffloadPrivatizationPrepare.cpp
+  OpenMPSIMDInlineBoost.cpp
 
   DEPENDS
   MLIROpenMPPassIncGen
