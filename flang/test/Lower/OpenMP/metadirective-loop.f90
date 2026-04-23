@@ -2,8 +2,33 @@
 
 ! RUN: %flang_fc1 -fopenmp -emit-hlfir -fopenmp-version=50 %s -o - | FileCheck %s
 ! RUN: %flang_fc1 -fopenmp -emit-hlfir -fopenmp-version=51 %s -o - | FileCheck %s
-! RUN: %flang_fc1 -fopenmp -emit-hlfir -fopenmp-version=52 -cpp -DOMP_52 %s -o - | FileCheck %s
+! RUN: %flang_fc1 -fopenmp -emit-hlfir -fopenmp-version=52 -cpp -DOMP_52 %s -o - | FileCheck --check-prefixes=CHECK,OMP52 %s
 
+#ifdef OMP_52
+! Dynamic condition with loop-associated variants (parallel do / parallel do).
+! OMP52-LABEL: func @_QPtest_loop_dynamic
+! OMP52:         fir.if
+! OMP52:           omp.parallel
+! OMP52:             omp.wsloop
+! OMP52:               omp.loop_nest
+! OMP52:           } else {
+! OMP52:           omp.parallel
+! OMP52:             omp.wsloop
+! OMP52:               omp.loop_nest
+subroutine test_loop_dynamic(cond, a, n)
+  logical, intent(in) :: cond
+  real, intent(inout) :: a(:)
+  integer, intent(in) :: n
+  !$omp metadirective &
+  !$omp   when(user={condition(cond)}: parallel do) &
+  !$omp   otherwise(parallel do)
+  do i = 1, n
+    a(i) = a(i) + 1.0
+  end do
+end subroutine
+#endif
+
+! Static resolution: vendor matches -> parallel do with the loop.
 ! CHECK-LABEL: func @_QPtest_loop_vendor_match
 ! CHECK:         omp.parallel
 ! CHECK:           omp.wsloop
