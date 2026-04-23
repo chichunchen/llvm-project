@@ -1,5 +1,6 @@
 ! Test lowering of metadirective target_device arch selection inside a target
-! region. This test is inspired by SOLLVE tests: test_metadirective_arch_is_nvidia.F90
+! region. This test is inspired by the SOLLVE test
+! test_metadirective_arch_is_nvidia.F90.
 
 ! RUN: %flang_fc1 -cpp -DGPU_ARCH=amdgcn -fopenmp -emit-hlfir -fopenmp-version=50 %s -o - | FileCheck --check-prefixes=HOST,COMMON %s
 ! RUN: %flang_fc1 -cpp -DGPU_ARCH=spirv64 -fopenmp -emit-hlfir -fopenmp-version=50 %s -o - | FileCheck --check-prefixes=HOST,COMMON %s

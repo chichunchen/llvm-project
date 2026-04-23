@@ -190,18 +190,19 @@ subroutine test_isa_no_match_default()
 #endif
 end subroutine
 
-! Below two functions was ported from clang/test/OpenMP/metadirective_device_isa_codegen_amdgcn.cpp
+! The following two functions were ported from
+! clang/test/OpenMP/metadirective_device_isa_codegen_amdgcn.cpp.
 
 ! AMDGCN-LABEL: func.func @_QPtest_amdgcn_device_isa_selected()
 ! AMDGCN:         omp.target
-! AMDGCN:           omp.parallel {
-! AMDGCN:             omp.wsloop {
+! AMDGCN:           omp.parallel
+! AMDGCN:             omp.wsloop
 ! AMDGCN:               omp.loop_nest
 
 ! AMDGCN-LABEL: func.func @_QPtest_amdgcn_device_isa_not_selected()
 ! AMDGCN:         omp.target
 ! AMDGCN-NOT:     omp.parallel
-! AMDGCN:           omp.wsloop {
+! AMDGCN:           omp.wsloop
 ! AMDGCN:             omp.loop_nest
 subroutine test_amdgcn_device_isa_selected()
   integer, parameter :: n = 32

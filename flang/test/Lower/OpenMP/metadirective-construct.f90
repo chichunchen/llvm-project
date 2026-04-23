@@ -35,7 +35,7 @@ end subroutine
 
 subroutine test_construct_parallel_do()
   integer :: i
-  ! Inside parallel do — construct={parallel do} should match in the loop body.
+  ! Inside parallel do, construct={parallel do} should match in the loop body.
   !$omp parallel do
   do i = 1, 10
     !$omp metadirective &
@@ -261,6 +261,24 @@ subroutine test_construct_not_enclosing()
   !$omp & otherwise(taskwait)
 end subroutine
 
+subroutine test_construct_parallel_do_not_enclosing()
+  ! A compound selector must require both parallel and do in order, not match
+  ! unconditionally because the compound selector spelling is not a leaf trait.
+  !$omp metadirective &
+  !$omp & when(construct={parallel do}: taskyield) &
+  !$omp & otherwise(taskwait)
+end subroutine
+
+subroutine test_construct_target_parallel_do_partial()
+  ! target parallel is missing the associated do context, so the
+  ! target-parallel-do selector must not match.
+  !$omp target parallel
+  !$omp metadirective &
+  !$omp & when(construct={target parallel do}: taskyield) &
+  !$omp & otherwise(taskwait)
+  !$omp end target parallel
+end subroutine
+
 ! DEFAULT-LABEL: func.func @_QPtest_construct_parallel()
 ! DEFAULT:         omp.parallel {
 ! DEFAULT:           omp.taskwait
@@ -457,3 +475,15 @@ end subroutine
 ! OTHERWISE-LABEL: func.func @_QPtest_construct_not_enclosing()
 ! OTHERWISE:         omp.taskwait
 ! OTHERWISE:         return
+
+! OTHERWISE-LABEL: func.func @_QPtest_construct_parallel_do_not_enclosing()
+! OTHERWISE-NOT:     omp.taskyield
+! OTHERWISE:         omp.taskwait
+! OTHERWISE:         return
+
+! OTHERWISE-LABEL: func.func @_QPtest_construct_target_parallel_do_partial()
+! OTHERWISE:         omp.target
+! OTHERWISE:           omp.parallel {
+! OTHERWISE-NOT:         omp.taskyield
+! OTHERWISE:             omp.taskwait
+! OTHERWISE:             omp.terminator

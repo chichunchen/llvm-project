@@ -69,7 +69,7 @@ end subroutine
 ! CHECK-LABEL: func @_QPtest_loop_simd_match
 ! CHECK-NOT:     omp.parallel
 ! CHECK-NOT:     omp.wsloop
-! CHECK:         omp.simd
+! CHECK:         omp.simd linear({{.*}}) private({{.*}}) {
 ! CHECK:           omp.loop_nest
 subroutine test_loop_simd_match(d, n)
   real, intent(inout) :: d(:)
@@ -83,6 +83,39 @@ subroutine test_loop_simd_match(d, n)
 #endif
   do i = 1, n
     d(i) = d(i) + 3.0
+  end do
+end subroutine
+
+! CHECK-LABEL: func @_QPtest_loop_simd_collapse_match
+! CHECK:         %[[I_ORIG:[0-9]+]]:2 = hlfir.declare {{.*}}uniq_name = "_QFtest_loop_simd_collapse_matchEi"
+! CHECK:         %[[J_ORIG:[0-9]+]]:2 = hlfir.declare {{.*}}uniq_name = "_QFtest_loop_simd_collapse_matchEj"
+! CHECK-NOT:     omp.parallel
+! CHECK-NOT:     omp.wsloop
+! CHECK:         omp.simd private(
+! CHECK-SAME:      @_QFtest_loop_simd_collapse_matchEi_private_i32
+! CHECK-SAME:      @_QFtest_loop_simd_collapse_matchEj_private_i32
+! CHECK:           omp.loop_nest {{.*}} collapse(2)
+! CHECK:             %[[I_PRIV:[0-9]+]]:2 = hlfir.declare {{.*}}uniq_name = "_QFtest_loop_simd_collapse_matchEi"
+! CHECK:             %[[J_PRIV:[0-9]+]]:2 = hlfir.declare {{.*}}uniq_name = "_QFtest_loop_simd_collapse_matchEj"
+! CHECK:             fir.if
+! CHECK:               %[[I_FINAL:[0-9]+]] = fir.load %[[I_PRIV]]#0
+! CHECK:               hlfir.assign %[[I_FINAL]] to %[[I_ORIG]]#0
+! CHECK:               %[[J_FINAL:[0-9]+]] = fir.load %[[J_PRIV]]#0
+! CHECK:               hlfir.assign %[[J_FINAL]] to %[[J_ORIG]]#0
+subroutine test_loop_simd_collapse_match(a, n)
+  real, intent(inout) :: a(:,:)
+  integer, intent(in) :: n
+  !$omp metadirective &
+  !$omp   when(implementation={vendor(llvm)}: simd collapse(2)) &
+#ifdef OMP_52
+  !$omp   otherwise(do)
+#else
+  !$omp   default(do)
+#endif
+  do i = 1, n
+    do j = 1, n
+      a(i, j) = a(i, j) + 1.0
+    end do
   end do
 end subroutine
 

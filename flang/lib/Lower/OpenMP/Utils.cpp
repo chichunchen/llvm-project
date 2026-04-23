@@ -702,6 +702,10 @@ pft::Evaluation *getNestedDoConstruct(pft::Evaluation &eval) {
     //     <<DoConstruct>> -> 7
     if (nested.getIf<parser::NonLabelDoStmt>())
       continue;
+    // A metadirective between collapsed loops (e.g. resolving to nothing or
+    // simd) is not a loop itself, so skip it.
+    if (isMetadirectiveEval(nested))
+      continue;
     assert(nested.getIf<parser::DoConstruct>() &&
            "Unexpected construct in the nested evaluations");
     return &nested;
@@ -1196,7 +1200,7 @@ static void processTraitProperties(
       continue;
     }
 
-    // Unknown property, add as ISA-like raw string.
+    // Treat unknown properties as ISA-like raw strings.
     vmi.addTrait(set, llvm::omp::TraitProperty::device_isa___ANY, name->v,
                  scorePtr);
   }
@@ -1278,6 +1282,46 @@ getTraitScore(const std::optional<parser::OmpTraitSelector::Properties> &props,
   return &*scoreStorage;
 }
 
+static std::optional<llvm::omp::TraitProperty>
+getConstructTraitProperty(llvm::omp::Directive dir) {
+  switch (dir) {
+  case llvm::omp::Directive::OMPD_target:
+    return llvm::omp::TraitProperty::construct_target_target;
+  case llvm::omp::Directive::OMPD_teams:
+    return llvm::omp::TraitProperty::construct_teams_teams;
+  case llvm::omp::Directive::OMPD_parallel:
+    return llvm::omp::TraitProperty::construct_parallel_parallel;
+  case llvm::omp::Directive::OMPD_do:
+    return llvm::omp::TraitProperty::construct_for_for;
+  case llvm::omp::Directive::OMPD_simd:
+    return llvm::omp::TraitProperty::construct_simd_simd;
+  case llvm::omp::Directive::OMPD_dispatch:
+    return llvm::omp::TraitProperty::construct_dispatch_dispatch;
+  default:
+    return std::nullopt;
+  }
+}
+
+static bool
+processConstructDirectiveTrait(llvm::omp::VariantMatchInfo &vmi,
+                               const parser::OmpTraitSelectorName &selectorName,
+                               llvm::APInt *scorePtr) {
+  const auto *dir = std::get_if<llvm::omp::Directive>(&selectorName.u);
+  if (!dir)
+    return false;
+
+  bool addedTrait = false;
+  for (llvm::omp::Directive leaf : llvm::omp::getLeafConstructsOrSelf(*dir)) {
+    if (std::optional<llvm::omp::TraitProperty> property =
+            getConstructTraitProperty(leaf)) {
+      vmi.addTrait(llvm::omp::TraitSet::construct, *property,
+                   selectorName.ToString(), scorePtr);
+      addedTrait = true;
+    }
+  }
+  return addedTrait;
+}
+
 /// Populate a VariantMatchInfo from context selector.
 /// For user conditions, attempts constant folding. Non-constant conditions
 /// are recorded as user_condition_unknown and the expression pointer is
@@ -1310,6 +1354,11 @@ void makeVariantMatchInfo(llvm::omp::VariantMatchInfo &vmi,
       std::optional<llvm::APInt> score;
       llvm::APInt *scorePtr = getTraitScore(props, semaCtx, score);
 
+      if (!props && set == llvm::omp::TraitSet::construct &&
+          processConstructDirectiveTrait(vmi, selectorName, scorePtr)) {
+        continue;
+      }
+
       processTraitProperties(vmi, set, selector, props, scorePtr);
 
       if (props || set != llvm::omp::TraitSet::construct)
@@ -1322,6 +1371,20 @@ void makeVariantMatchInfo(llvm::omp::VariantMatchInfo &vmi,
         vmi.addTrait(set, propKind, selectorName.ToString(), scorePtr);
     }
   }
+}
+
+/// Return true if \p eval holds a metadirective.
+bool isMetadirectiveEval(lower::pft::Evaluation &eval) {
+  if (const auto *decl = eval.getIf<parser::OpenMPDeclarativeConstruct>())
+    return std::holds_alternative<parser::OmpMetadirectiveDirective>(decl->u);
+  if (const auto *ompConstruct = eval.getIf<parser::OpenMPConstruct>()) {
+    if (const auto *standalone =
+            std::get_if<parser::OpenMPStandaloneConstruct>(&ompConstruct->u)) {
+      return std::holds_alternative<parser::OmpMetadirectiveDirective>(
+          standalone->u);
+    }
+  }
+  return false;
 }
 
 } // namespace omp

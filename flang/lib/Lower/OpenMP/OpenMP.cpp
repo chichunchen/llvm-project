@@ -74,6 +74,14 @@ static void processHostEvalClauses(lower::AbstractConverter &converter,
                                    lower::pft::Evaluation &eval,
                                    mlir::Location loc);
 
+static void processHostEvalClauses(lower::AbstractConverter &converter,
+                                   semantics::SemanticsContext &semaCtx,
+                                   lower::StatementContext &stmtCtx,
+                                   lower::pft::Evaluation &eval,
+                                   mlir::Location loc,
+                                   const ConstructQueue &queue,
+                                   ConstructQueue::const_iterator item);
+
 namespace {
 /// Structure holding information that is needed to pass host-evaluated
 /// information to later lowering stages.
@@ -85,6 +93,12 @@ public:
                                        lower::StatementContext &,
                                        lower::pft::Evaluation &,
                                        mlir::Location);
+  friend void ::processHostEvalClauses(lower::AbstractConverter &,
+                                       semantics::SemanticsContext &,
+                                       lower::StatementContext &,
+                                       lower::pft::Evaluation &, mlir::Location,
+                                       const ConstructQueue &,
+                                       ConstructQueue::const_iterator);
 
   /// Fill \c vars with values stored in \c ops.
   ///
@@ -564,6 +578,96 @@ static void processHostEvalClauses(lower::AbstractConverter &converter,
   List<lower::omp::Clause> clauses;
   extractClauses(eval, clauses);
   processEval(eval, clauses);
+}
+
+/// Queue-based overload for host-eval clause processing. Normal target
+/// constructs can be understood from the PFT evaluation tree; metadirective
+/// variants only exist in the selected construct queue, so handle them
+/// directly.
+static void processHostEvalClauses(lower::AbstractConverter &converter,
+                                   semantics::SemanticsContext &semaCtx,
+                                   lower::StatementContext &stmtCtx,
+                                   lower::pft::Evaluation &eval,
+                                   mlir::Location loc,
+                                   const ConstructQueue &queue,
+                                   ConstructQueue::const_iterator item) {
+  if (!isMetadirectiveEval(eval)) {
+    processHostEvalClauses(converter, semaCtx, stmtCtx, eval, loc);
+    return;
+  }
+
+  // For metadirective evaluations, reconstruct the combined directive from the
+  // construct queue and collect all clauses from queue items.
+  llvm::SmallVector<llvm::omp::Directive> leafDirs;
+  List<lower::omp::Clause> allClauses;
+  for (auto it = item; it != queue.end(); ++it) {
+    leafDirs.push_back(it->id);
+    allClauses.append(it->clauses);
+  }
+  llvm::omp::Directive combinedDir = llvm::omp::getCompoundConstruct(leafDirs);
+
+  HostEvalInfo *hostInfo = getHostEvalInfoStackTop(converter);
+  assert(hostInfo && "expected HOST_EVAL info structure");
+  ClauseProcessor cp(converter, semaCtx, allClauses);
+
+  using namespace llvm::omp;
+  switch (combinedDir) {
+  case OMPD_teams_distribute_parallel_do:
+  case OMPD_teams_distribute_parallel_do_simd:
+    cp.processThreadLimit(stmtCtx, hostInfo->ops);
+    [[fallthrough]];
+  case OMPD_target_teams_distribute_parallel_do:
+  case OMPD_target_teams_distribute_parallel_do_simd:
+    cp.processNumTeams(stmtCtx, hostInfo->ops);
+    [[fallthrough]];
+  case OMPD_distribute_parallel_do:
+  case OMPD_distribute_parallel_do_simd:
+    cp.processNumThreads(stmtCtx, hostInfo->ops);
+    [[fallthrough]];
+  case OMPD_distribute:
+  case OMPD_distribute_simd:
+    cp.processCollapse(loc, eval, hostInfo->ops, hostInfo->ops, hostInfo->iv);
+    break;
+
+  case OMPD_teams:
+    cp.processThreadLimit(stmtCtx, hostInfo->ops);
+    [[fallthrough]];
+  case OMPD_target_teams:
+    cp.processNumTeams(stmtCtx, hostInfo->ops);
+    break;
+
+  case OMPD_teams_distribute:
+  case OMPD_teams_distribute_simd:
+    cp.processThreadLimit(stmtCtx, hostInfo->ops);
+    [[fallthrough]];
+  case OMPD_target_teams_distribute:
+  case OMPD_target_teams_distribute_simd:
+    cp.processCollapse(loc, eval, hostInfo->ops, hostInfo->ops, hostInfo->iv);
+    cp.processNumTeams(stmtCtx, hostInfo->ops);
+    break;
+
+  case OMPD_teams_loop:
+    cp.processThreadLimit(stmtCtx, hostInfo->ops);
+    [[fallthrough]];
+  case OMPD_target_teams_loop:
+    cp.processNumTeams(stmtCtx, hostInfo->ops);
+    [[fallthrough]];
+  case OMPD_loop:
+    cp.processCollapse(loc, eval, hostInfo->ops, hostInfo->ops, hostInfo->iv);
+    break;
+
+  case OMPD_teams_workdistribute:
+    cp.processThreadLimit(stmtCtx, hostInfo->ops);
+    [[fallthrough]];
+  case OMPD_target_teams_workdistribute:
+    cp.processNumTeams(stmtCtx, hostInfo->ops);
+    break;
+
+  case OMPD_target:
+    break;
+  default:
+    break;
+  }
 }
 
 static lower::pft::Evaluation *
@@ -1768,7 +1872,8 @@ static void genTargetClauses(
     DefaultMapsTy &defaultMaps,
     llvm::SmallVectorImpl<const semantics::Symbol *> &hasDeviceAddrSyms,
     llvm::SmallVectorImpl<const semantics::Symbol *> &isDevicePtrSyms,
-    llvm::SmallVectorImpl<const semantics::Symbol *> &mapSyms) {
+    llvm::SmallVectorImpl<const semantics::Symbol *> &mapSyms,
+    const ConstructQueue &queue, ConstructQueue::const_iterator item) {
   ClauseProcessor cp(converter, semaCtx, clauses);
   cp.processBare(clauseOps);
   cp.processDefaultMap(stmtCtx, defaultMaps);
@@ -1777,7 +1882,7 @@ static void genTargetClauses(
   cp.processHasDeviceAddr(stmtCtx, clauseOps, hasDeviceAddrSyms);
   if (HostEvalInfo *hostEvalInfo = getHostEvalInfoStackTop(converter)) {
     // Only process host_eval if compiling for the host device.
-    processHostEvalClauses(converter, semaCtx, stmtCtx, eval, loc);
+    processHostEvalClauses(converter, semaCtx, stmtCtx, eval, loc, queue, item);
     hostEvalInfo->collectValues(clauseOps.hostEvalVars);
   }
   cp.processIf(llvm::omp::Directive::OMPD_target, clauseOps);
@@ -2798,7 +2903,7 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
       hasDeviceAddrSyms;
   genTargetClauses(converter, semaCtx, symTable, stmtCtx, eval, item->clauses,
                    loc, clauseOps, defaultMaps, hasDeviceAddrSyms,
-                   isDevicePtrSyms, mapSyms);
+                   isDevicePtrSyms, mapSyms, queue, item);
 
   if (!isDevicePtrSyms.empty()) {
     // is_device_ptr maps get duplicated so the clause and synthesized
@@ -2965,6 +3070,12 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
     }
   };
   lower::pft::visitAllSymbols(eval, captureImplicitMap);
+
+  // Capture symbols from spliced nested evaluations for metadirectives.
+  if (isMetadirectiveEval(eval) && eval.hasNestedEvaluations()) {
+    for (auto &nestedEval : eval.getNestedEvaluations())
+      lower::pft::visitAllSymbols(nestedEval, captureImplicitMap);
+  }
 
   auto targetOp = mlir::omp::TargetOp::create(firOpBuilder, loc, clauseOps);
 
@@ -4405,6 +4516,85 @@ private:
 };
 } // namespace
 
+static lower::pft::Evaluation *
+spliceAssociatedDoEval(lower::pft::Evaluation &eval) {
+  if (eval.hasNestedEvaluations()) {
+    lower::pft::Evaluation &nested = eval.getNestedEvaluations().back();
+    return nested.getIf<parser::DoConstruct>() ? &nested : nullptr;
+  }
+
+  auto *parentList = eval.parentConstruct
+                         ? eval.parentConstruct->evaluationList.get()
+                         : &eval.getOwningProcedure()->evaluationList;
+  auto metaIt = llvm::find_if(
+      *parentList, [&](lower::pft::Evaluation &e) { return &e == &eval; });
+  assert(metaIt != parentList->end() &&
+         "metadirective eval not found in parent list");
+
+  auto loopIt = std::next(metaIt);
+  while (loopIt != parentList->end() &&
+         (loopIt->isEndStmt() || loopIt->getIf<parser::CompilerDirective>()))
+    ++loopIt;
+
+  if (loopIt == parentList->end() || !loopIt->getIf<parser::DoConstruct>())
+    return nullptr;
+
+  eval.evaluationList->splice(eval.evaluationList->end(), *parentList, loopIt);
+  return &eval.getNestedEvaluations().back();
+}
+
+static void setSymbolDSA(semantics::Symbol &sym, semantics::Symbol::Flag dsa) {
+  using Symbol = semantics::Symbol;
+  Symbol::Flags dataSharingAttributeFlags{
+      Symbol::Flag::OmpShared,       Symbol::Flag::OmpPrivate,
+      Symbol::Flag::OmpFirstPrivate, Symbol::Flag::OmpLastPrivate,
+      Symbol::Flag::OmpReduction,    Symbol::Flag::OmpLinear};
+  sym.flags() &=
+      ~(dataSharingAttributeFlags |
+        Symbol::Flags{Symbol::Flag::OmpExplicit, Symbol::Flag::OmpImplicit,
+                      Symbol::Flag::OmpPreDetermined});
+  sym.flags() |= Symbol::Flags{Symbol::Flag::OmpPreDetermined, dsa};
+}
+
+static semantics::Symbol *
+getDoConstructIVSymbol(const parser::DoConstruct &doConstruct) {
+  if (const auto &loopCtrl = doConstruct.GetLoopControl())
+    if (auto *bounds = std::get_if<parser::LoopControl::Bounds>(&loopCtrl->u))
+      return bounds->Name().thing.symbol;
+  return nullptr;
+}
+
+static void
+markMetadirectiveLoopIVs(semantics::SemanticsContext &semaCtx,
+                         const parser::OmpDirectiveSpecification &spec,
+                         lower::pft::Evaluation &loopEval) {
+  using Symbol = semantics::Symbol;
+
+  auto [depth, _] = semantics::omp::GetAffectedNestDepthWithReason(
+      spec, semaCtx.langOptions().OpenMPVersion, &semaCtx);
+  if (!depth || !depth.value || *depth.value <= 0)
+    return;
+
+  int64_t affectedDepth = *depth.value;
+  Symbol::Flag ivDSA;
+  if (!llvm::omp::allSimdSet.test(spec.DirId()))
+    ivDSA = Symbol::Flag::OmpPrivate;
+  else if (affectedDepth == 1 && semaCtx.langOptions().OpenMPVersion < 60)
+    ivDSA = Symbol::Flag::OmpLinear;
+  else
+    ivDSA = Symbol::Flag::OmpLastPrivate;
+
+  lower::pft::Evaluation *doEval = &loopEval;
+  for (int64_t level = 0; level < affectedDepth; ++level) {
+    auto *doConstruct = doEval->getIf<parser::DoConstruct>();
+    assert(doConstruct && "expected associated DO construct");
+    if (semantics::Symbol *sym = getDoConstructIVSymbol(*doConstruct))
+      setSymbolDSA(*sym, ivDSA);
+    if (level + 1 < affectedDepth)
+      doEval = getNestedDoConstruct(*doEval);
+  }
+}
+
 static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
                    semantics::SemanticsContext &semaCtx,
                    lower::pft::Evaluation &eval,
@@ -4441,9 +4631,8 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
 
   llvm::SmallVector<const parser::OmpDirectiveSpecification *> candidates;
   llvm::SmallVector<llvm::omp::VariantMatchInfo, 4> vmis;
-  // nullptr:
-  //  1. implicit `nothing` variant.
-  //  2. no explicit otherwise/default clause is present.
+  // A null directive specification represents either the implicit `nothing`
+  // variant or the absence of an explicit otherwise/default clause.
   const parser::OmpDirectiveSpecification *fallback = nullptr;
 
   auto getContextSelector = [](const parser::OmpClause::When &whenClause)
@@ -4481,7 +4670,7 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
       const auto *ctxSel = getContextSelector(*whenClause);
       const auto *variant = getDirectiveVariant(*whenClause);
 
-      // Always match if there's no context selector.
+      // Always match when there is no context selector.
       if (!ctxSel) {
         candidates.push_back(variant);
         vmis.emplace_back();
@@ -4514,29 +4703,6 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
     }
   }
 
-  // For loop-associated metadirective variants, the associated DO construct is
-  // a sibling evaluation in the PFT rather than a nested child. Splice that
-  // sibling DO evaluation into the metadirective evaluation's nested list so
-  // loop lowering can find it via getNestedDoConstruct().
-  auto spliceAssociatedDoEval = [](lower::pft::Evaluation &eval) {
-    if (eval.hasNestedEvaluations())
-      return;
-    auto *parentList = eval.parentConstruct
-                           ? eval.parentConstruct->evaluationList.get()
-                           : &eval.getOwningProcedure()->evaluationList;
-    auto metaIt = llvm::find_if(
-        *parentList, [&](lower::pft::Evaluation &e) { return &e == &eval; });
-    assert(metaIt != parentList->end() &&
-           "metadirective eval not found in parent list");
-    auto loopIt = std::find_if(std::next(metaIt), parentList->end(),
-                               [](lower::pft::Evaluation &e) {
-                                 return e.getIf<parser::DoConstruct>();
-                               });
-    if (loopIt != parentList->end())
-      eval.evaluationList->splice(eval.evaluationList->end(), *parentList,
-                                  loopIt);
-  };
-
   // Lower a single resolved candidate. Splice the associated sibling DO
   // evaluation for loop-associated variants.
   auto genVariant = [&](const parser::OmpDirectiveSpecification *spec) {
@@ -4553,8 +4719,17 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
     if (llvm::any_of(queue, [](const auto &item) {
           return llvm::omp::getDirectiveAssociation(item.id) ==
                  llvm::omp::Association::LoopNest;
-        }))
-      spliceAssociatedDoEval(eval);
+        })) {
+      lower::pft::Evaluation *loopEval = spliceAssociatedDoEval(eval);
+      if (!loopEval)
+        TODO(variantLoc, "loop-associated METADIRECTIVE without associated DO");
+
+      // Semantics marks associated loop IVs for
+      // `parser::OpenMPLoopConstruct`. Metadirective-selected loop variants
+      // bypass that parse-tree shape, so reproduce the same DSA choice after
+      // splicing the associated DO.
+      markMetadirectiveLoopIVs(semaCtx, *spec, *loopEval);
+    }
 
     genOMPDispatch(converter, symTable, semaCtx, eval, variantLoc, queue,
                    queue.begin());
@@ -4567,7 +4742,7 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
     int bestIdx = llvm::omp::getBestVariantMatchForContext(vmis, ompCtx);
     if (bestIdx >= 0) {
       assert(static_cast<size_t>(bestIdx) < candidates.size() &&
-             "Best variant index out of range");
+             "best variant index out of range");
       selected = candidates[bestIdx];
     }
   }
