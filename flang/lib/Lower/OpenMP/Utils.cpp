@@ -1324,6 +1324,20 @@ void makeVariantMatchInfo(llvm::omp::VariantMatchInfo &vmi,
   }
 }
 
+/// Check if eval holds a metadirective.
+bool isMetadirectiveEval(lower::pft::Evaluation &eval) {
+  if (eval.getIf<parser::OpenMPDeclarativeConstruct>())
+    return true;
+  if (const auto *ompConstruct = eval.getIf<parser::OpenMPConstruct>()) {
+    if (const auto *standalone =
+            std::get_if<parser::OpenMPStandaloneConstruct>(&ompConstruct->u)) {
+      return std::holds_alternative<parser::OmpMetadirectiveDirective>(
+          standalone->u);
+    }
+  }
+  return false;
+}
+
 } // namespace omp
 } // namespace lower
 } // namespace Fortran

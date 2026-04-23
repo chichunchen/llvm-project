@@ -5,12 +5,12 @@
 ! RUN: %flang_fc1 -fopenmp -emit-hlfir -fopenmp-version=52 %s -o - | FileCheck --check-prefix=HOST %s
 ! RUN: %flang_fc1 -fopenmp -emit-hlfir -fopenmp-version=52 -triple amdgcn-amd-amdhsa -fopenmp-is-target-device %s -o - | FileCheck --check-prefix=AMDGCN %s
 
-! HOST-LABEL: func.func @_QPtest_target_device_kind_gpu()
+! HOST-LABEL: func.func @_QPtest_target_device_kind_gpu(
 ! HOST-NOT:     omp.target
 ! HOST:         omp.parallel
 ! HOST-NOT:     omp.distribute
 ! HOST:         omp.wsloop
-! AMDGCN-LABEL: func.func @_QPtest_target_device_kind_gpu()
+! AMDGCN-LABEL: func.func @_QPtest_target_device_kind_gpu(
 ! AMDGCN-NOT:     omp.taskwait
 ! AMDGCN:         omp.target
 ! AMDGCN:         omp.teams
@@ -28,12 +28,12 @@ subroutine test_target_device_kind_gpu(a, n)
   end do
 end subroutine
 
-! HOST-LABEL: func.func @_QPtest_target_device_arch_amdgcn()
+! HOST-LABEL: func.func @_QPtest_target_device_arch_amdgcn(
 ! HOST-NOT:     omp.target
 ! HOST-NOT:     omp.parallel
 ! HOST:         omp.taskwait
 ! HOST:         fir.do_loop
-! AMDGCN-LABEL: func.func @_QPtest_target_device_arch_amdgcn()
+! AMDGCN-LABEL: func.func @_QPtest_target_device_arch_amdgcn(
 ! AMDGCN-NOT:     omp.taskwait
 ! AMDGCN:         omp.target
 ! AMDGCN:         omp.teams

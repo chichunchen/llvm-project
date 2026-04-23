@@ -41,8 +41,38 @@ bool DataSharingProcessor::OMPConstructSymbolVisitor::isSymbolDefineBy(
     const semantics::Symbol *symbol, lower::pft::Evaluation &eval) const {
   return eval.visit(common::visitors{
       [&](const parser::OpenMPConstruct &functionParserNode) {
+        if (symDefMap.count(symbol) &&
+            symDefMap.at(symbol) == ConstructPtr(&functionParserNode))
+          return true;
+
+        // For metadirectives on standalone constructs, the construct itself
+        // does not introduce privatization. As a result, symbols from nested
+        // (spliced) DO evaluations may be associated with a null
+        // OpenMPConstruct pointer. This is expected and should be accepted.
+        if (const auto *standalone =
+                std::get_if<parser::OpenMPStandaloneConstruct>(
+                    &functionParserNode.u)) {
+          if (std::holds_alternative<parser::OmpMetadirectiveDirective>(
+                  standalone->u)) {
+            return symDefMap.count(symbol) &&
+                   symDefMap.at(symbol) ==
+                       ConstructPtr(
+                           static_cast<const parser::OpenMPConstruct *>(
+                               nullptr));
+          }
+        }
+        return false;
+      },
+      [&](const parser::OpenMPDeclarativeConstruct &) {
+        // Metadirective variants are resolved during lowering, so the eval
+        // is an OpenMPDeclarativeConstruct rather than an OpenMPConstruct.
+        // The visitor does not track declarative constructs, so symbols
+        // referenced at the top level of the eval (e.g. loop IVs from a
+        // spliced DO) are mapped to a null OpenMPConstruct pointer.
         return symDefMap.count(symbol) &&
-               symDefMap.at(symbol) == ConstructPtr(&functionParserNode);
+               symDefMap.at(symbol) ==
+                   ConstructPtr(
+                       static_cast<const parser::OpenMPConstruct *>(nullptr));
       },
       [](const auto &functionParserNode) { return false; }});
 }
@@ -77,6 +107,16 @@ DataSharingProcessor::DataSharingProcessor(
   eval.visit([&](const auto &functionParserNode) {
     parser::Walk(functionParserNode, visitor);
   });
+
+  // For metadirective evals, the associated DO loop is spliced into the eval
+  // tree but is not part of the metadirective's parse tree. Walk nested
+  // evaluations' parse trees so the visitor can track their symbols (e.g. loop
+  // iteration variables).
+  if (isMetadirectiveEval(eval) && eval.hasNestedEvaluations()) {
+    for (auto &nestedEval : eval.getNestedEvaluations()) {
+      nestedEval.visit([&](const auto &node) { parser::Walk(node, visitor); });
+    }
+  }
 }
 
 DataSharingProcessor::DataSharingProcessor(lower::AbstractConverter &converter,
@@ -537,6 +577,19 @@ void DataSharingProcessor::collectPrivatizedSymbols(
   llvm::SetVector<const semantics::Scope *> clauseScopes;
   (void)collectScopes(semaCtx, eval, clauseScopes);
 
+  // For metadirective evals, the source range only covers the directive
+  // clauses, not the spliced DO loop. The scope found from that narrow range
+  // may not include parent scopes where the loop IV is declared (e.g. the
+  // function scope when the metadirective is inside a target region). Walk up
+  // the scope chain to include all ancestor scopes.
+  if (isMetadirectiveEval(eval) && !clauseScopes.empty()) {
+    const semantics::Scope *scope = *clauseScopes.begin();
+    while (scope->kind() != semantics::Scope::Kind::Global) {
+      clauseScopes.insert(scope);
+      scope = &scope->parent();
+    }
+  }
+
   for (const auto *sym : allSymbols) {
     if (semantics::omp::IsPrivatizable(*sym) &&
         !symbolsInNestedRegions.contains(sym) &&
@@ -565,6 +618,14 @@ void DataSharingProcessor::collectSymbols(
   converter.collectSymbolSet(eval, allSymbols, flag,
                              /*collectSymbols=*/true,
                              /*collectHostAssociatedSymbols=*/true);
+
+  // Collect from spliced nested evals for metadirective.
+  if (isMetadirectiveEval(eval) && eval.hasNestedEvaluations()) {
+    for (auto &nestedEval : eval.getNestedEvaluations())
+      converter.collectSymbolSet(nestedEval, allSymbols, flag,
+                                 /*collectSymbols=*/true,
+                                 /*collectHostAssociatedSymbols=*/true);
+  }
 
   llvm::SetVector<const semantics::Symbol *> symbolsInNestedRegions;
   collectSymbolsInNestedRegions(eval, flag, symbolsInNestedRegions);

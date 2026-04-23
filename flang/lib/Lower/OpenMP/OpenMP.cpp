@@ -2966,6 +2966,12 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
   };
   lower::pft::visitAllSymbols(eval, captureImplicitMap);
 
+  // Capture symbols from spliced nested evals for metadirective.
+  if (isMetadirectiveEval(eval) && eval.hasNestedEvaluations()) {
+    for (auto &nestedEval : eval.getNestedEvaluations())
+      lower::pft::visitAllSymbols(nestedEval, captureImplicitMap);
+  }
+
   auto targetOp = mlir::omp::TargetOp::create(firOpBuilder, loc, clauseOps);
 
   llvm::SmallVector<mlir::Value> hasDeviceAddrBaseValues, mapBaseValues;
@@ -4553,8 +4559,25 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
     if (llvm::any_of(queue, [](const auto &item) {
           return llvm::omp::getDirectiveAssociation(item.id) ==
                  llvm::omp::Association::LoopNest;
-        }))
+        })) {
       spliceAssociatedDoEval(eval);
+
+      // Semantics sets OmpPreDetermined/OmpPrivate on IVs for
+      // OpenMPLoopConstruct, but metadirective bypasses that path.
+      if (auto *doConstruct =
+              eval.getNestedEvaluations().back().getIf<parser::DoConstruct>()) {
+        if (const auto &loopCtrl = doConstruct->GetLoopControl()) {
+          if (auto *bounds =
+                  std::get_if<parser::LoopControl::Bounds>(&loopCtrl->u)) {
+            if (auto *sym = bounds->Name().thing.symbol) {
+              sym->set(semantics::Symbol::Flag::OmpPreDetermined);
+              if (!sym->test(semantics::Symbol::Flag::OmpLinear))
+                sym->set(semantics::Symbol::Flag::OmpPrivate);
+            }
+          }
+        }
+      }
+    }
 
     genOMPDispatch(converter, symTable, semaCtx, eval, variantLoc, queue,
                    queue.begin());

@@ -194,14 +194,14 @@ end subroutine
 
 ! AMDGCN-LABEL: func.func @_QPtest_amdgcn_device_isa_selected()
 ! AMDGCN:         omp.target
-! AMDGCN:           omp.parallel {
-! AMDGCN:             omp.wsloop {
+! AMDGCN:           omp.parallel
+! AMDGCN:             omp.wsloop
 ! AMDGCN:               omp.loop_nest
 
 ! AMDGCN-LABEL: func.func @_QPtest_amdgcn_device_isa_not_selected()
 ! AMDGCN:         omp.target
 ! AMDGCN-NOT:     omp.parallel
-! AMDGCN:           omp.wsloop {
+! AMDGCN:           omp.wsloop
 ! AMDGCN:             omp.loop_nest
 subroutine test_amdgcn_device_isa_selected()
   integer, parameter :: n = 32
