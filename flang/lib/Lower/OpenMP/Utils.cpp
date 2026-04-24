@@ -702,6 +702,10 @@ pft::Evaluation *getNestedDoConstruct(pft::Evaluation &eval) {
     //     <<DoConstruct>> -> 7
     if (nested.getIf<parser::NonLabelDoStmt>())
       continue;
+    // A metadirective between collapsed loops (e.g. resolving to nothing
+    // or simd) is not a loop itself — skip it.
+    if (isMetadirectiveEval(nested))
+      continue;
     assert(nested.getIf<parser::DoConstruct>() &&
            "Unexpected construct in the nested evaluations");
     return &nested;

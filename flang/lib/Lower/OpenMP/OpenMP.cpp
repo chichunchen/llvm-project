@@ -562,9 +562,7 @@ static void processHostEvalClauses(lower::AbstractConverter &converter,
 
   // For metadirective evaluations, reconstruct the combined directive from the
   // construct queue and collect all clauses from queue items.
-  if (!ompEval) {
-    assert(eval.getIf<parser::OpenMPDeclarativeConstruct>() &&
-           "expected OpenMPConstruct or metadirective evaluation");
+  if (isMetadirectiveEval(eval)) {
 
     llvm::SmallVector<llvm::omp::Directive> leafDirs;
     List<lower::omp::Clause> allClauses;
@@ -4664,8 +4662,12 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
 
       // Semantics sets OmpPreDetermined/OmpPrivate on IVs for
       // OpenMPLoopConstruct, but metadirective bypasses that path.
-      if (auto *doConstruct =
-              eval.getNestedEvaluations().back().getIf<parser::DoConstruct>()) {
+      // Walk all nested DOs to cover collapsed loops.
+      for (lower::pft::Evaluation *doEval = &eval.getNestedEvaluations().back();
+           doEval;) {
+        auto *doConstruct = doEval->getIf<parser::DoConstruct>();
+        if (!doConstruct)
+          break;
         if (const auto &loopCtrl = doConstruct->GetLoopControl()) {
           if (auto *bounds =
                   std::get_if<parser::LoopControl::Bounds>(&loopCtrl->u)) {
@@ -4676,6 +4678,17 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
             }
           }
         }
+        // Find the next nested DO for collapse, if any.
+        lower::pft::Evaluation *nextDo = nullptr;
+        if (doEval->hasNestedEvaluations()) {
+          for (auto &nested : doEval->getNestedEvaluations()) {
+            if (nested.getIf<parser::DoConstruct>()) {
+              nextDo = &nested;
+              break;
+            }
+          }
+        }
+        doEval = nextDo;
       }
     }
 
