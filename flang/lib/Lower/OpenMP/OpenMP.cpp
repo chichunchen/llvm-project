@@ -72,7 +72,9 @@ static void processHostEvalClauses(lower::AbstractConverter &converter,
                                    semantics::SemanticsContext &semaCtx,
                                    lower::StatementContext &stmtCtx,
                                    lower::pft::Evaluation &eval,
-                                   mlir::Location loc);
+                                   mlir::Location loc,
+                                   const ConstructQueue &queue,
+                                   ConstructQueue::const_iterator item);
 
 namespace {
 /// Structure holding information that is needed to pass host-evaluated
@@ -84,7 +86,9 @@ public:
                                        semantics::SemanticsContext &,
                                        lower::StatementContext &,
                                        lower::pft::Evaluation &,
-                                       mlir::Location);
+                                       mlir::Location,
+                                       const ConstructQueue &,
+                                       ConstructQueue::const_iterator);
 
   /// Fill \c vars with values stored in \c ops.
   ///
@@ -404,7 +408,9 @@ static void processHostEvalClauses(lower::AbstractConverter &converter,
                                    semantics::SemanticsContext &semaCtx,
                                    lower::StatementContext &stmtCtx,
                                    lower::pft::Evaluation &eval,
-                                   mlir::Location loc) {
+                                   mlir::Location loc,
+                                   const ConstructQueue &queue,
+                                   ConstructQueue::const_iterator item) {
   // Obtain the list of clauses of the given OpenMP block or loop construct
   // evaluation. Other evaluations passed to this lambda keep `clauses`
   // unchanged.
@@ -553,11 +559,90 @@ static void processHostEvalClauses(lower::AbstractConverter &converter,
   };
 
   const auto *ompEval = eval.getIf<parser::OpenMPConstruct>();
-  assert(ompEval &&
-         llvm::omp::allTargetSet.test(
+
+  // For metadirective evaluations, reconstruct the combined directive from the
+  // construct queue and collect all clauses from queue items.
+  if (!ompEval) {
+    assert(eval.getIf<parser::OpenMPDeclarativeConstruct>() &&
+           "expected OpenMPConstruct or metadirective evaluation");
+
+    llvm::SmallVector<llvm::omp::Directive> leafDirs;
+    List<lower::omp::Clause> allClauses;
+    for (auto it = item; it != queue.end(); ++it) {
+      leafDirs.push_back(it->id);
+      allClauses.append(it->clauses);
+    }
+    llvm::omp::Directive combinedDir =
+        llvm::omp::getCompoundConstruct(leafDirs);
+
+    HostEvalInfo *hostInfo = getHostEvalInfoStackTop(converter);
+    assert(hostInfo && "expected HOST_EVAL info structure");
+    ClauseProcessor cp(converter, semaCtx, allClauses);
+
+    using namespace llvm::omp;
+    switch (combinedDir) {
+    case OMPD_teams_distribute_parallel_do:
+    case OMPD_teams_distribute_parallel_do_simd:
+      cp.processThreadLimit(stmtCtx, hostInfo->ops);
+      [[fallthrough]];
+    case OMPD_target_teams_distribute_parallel_do:
+    case OMPD_target_teams_distribute_parallel_do_simd:
+      cp.processNumTeams(stmtCtx, hostInfo->ops);
+      [[fallthrough]];
+    case OMPD_distribute_parallel_do:
+    case OMPD_distribute_parallel_do_simd:
+      cp.processNumThreads(stmtCtx, hostInfo->ops);
+      [[fallthrough]];
+    case OMPD_distribute:
+    case OMPD_distribute_simd:
+      cp.processCollapse(loc, eval, hostInfo->ops, hostInfo->ops, hostInfo->iv);
+      break;
+
+    case OMPD_teams:
+      cp.processThreadLimit(stmtCtx, hostInfo->ops);
+      [[fallthrough]];
+    case OMPD_target_teams:
+      cp.processNumTeams(stmtCtx, hostInfo->ops);
+      break;
+
+    case OMPD_teams_distribute:
+    case OMPD_teams_distribute_simd:
+      cp.processThreadLimit(stmtCtx, hostInfo->ops);
+      [[fallthrough]];
+    case OMPD_target_teams_distribute:
+    case OMPD_target_teams_distribute_simd:
+      cp.processCollapse(loc, eval, hostInfo->ops, hostInfo->ops, hostInfo->iv);
+      cp.processNumTeams(stmtCtx, hostInfo->ops);
+      break;
+
+    case OMPD_teams_loop:
+      cp.processThreadLimit(stmtCtx, hostInfo->ops);
+      [[fallthrough]];
+    case OMPD_target_teams_loop:
+      cp.processNumTeams(stmtCtx, hostInfo->ops);
+      [[fallthrough]];
+    case OMPD_loop:
+      cp.processCollapse(loc, eval, hostInfo->ops, hostInfo->ops, hostInfo->iv);
+      break;
+
+    case OMPD_teams_workdistribute:
+      cp.processThreadLimit(stmtCtx, hostInfo->ops);
+      [[fallthrough]];
+    case OMPD_target_teams_workdistribute:
+      cp.processNumTeams(stmtCtx, hostInfo->ops);
+      break;
+
+    case OMPD_target:
+      break;
+    default:
+      break;
+    }
+    return;
+  }
+
+  assert(llvm::omp::allTargetSet.test(
              parser::omp::GetOmpDirectiveName(*ompEval).v) &&
          "expected TARGET construct evaluation");
-  (void)ompEval;
 
   // Use the whole list of clauses passed to the construct here, rather than the
   // ones only applied to omp.target.
@@ -1768,7 +1853,8 @@ static void genTargetClauses(
     DefaultMapsTy &defaultMaps,
     llvm::SmallVectorImpl<const semantics::Symbol *> &hasDeviceAddrSyms,
     llvm::SmallVectorImpl<const semantics::Symbol *> &isDevicePtrSyms,
-    llvm::SmallVectorImpl<const semantics::Symbol *> &mapSyms) {
+    llvm::SmallVectorImpl<const semantics::Symbol *> &mapSyms,
+    const ConstructQueue &queue, ConstructQueue::const_iterator item) {
   ClauseProcessor cp(converter, semaCtx, clauses);
   cp.processBare(clauseOps);
   cp.processDefaultMap(stmtCtx, defaultMaps);
@@ -1777,7 +1863,8 @@ static void genTargetClauses(
   cp.processHasDeviceAddr(stmtCtx, clauseOps, hasDeviceAddrSyms);
   if (HostEvalInfo *hostEvalInfo = getHostEvalInfoStackTop(converter)) {
     // Only process host_eval if compiling for the host device.
-    processHostEvalClauses(converter, semaCtx, stmtCtx, eval, loc);
+    processHostEvalClauses(converter, semaCtx, stmtCtx, eval, loc, queue,
+                           item);
     hostEvalInfo->collectValues(clauseOps.hostEvalVars);
   }
   cp.processIf(llvm::omp::Directive::OMPD_target, clauseOps);
@@ -2798,7 +2885,7 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
       hasDeviceAddrSyms;
   genTargetClauses(converter, semaCtx, symTable, stmtCtx, eval, item->clauses,
                    loc, clauseOps, defaultMaps, hasDeviceAddrSyms,
-                   isDevicePtrSyms, mapSyms);
+                   isDevicePtrSyms, mapSyms, queue, item);
 
   if (!isDevicePtrSyms.empty()) {
     // is_device_ptr maps get duplicated so the clause and synthesized
@@ -4642,11 +4729,16 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
     auto ifOp = fir::IfOp::create(builder, loc, condVal,
                                   /*withElse=*/true);
     builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
-    genVariant(cand.dirSpec);
+    {
+      lower::SymMapScope scope(symTable);
+      genVariant(cand.dirSpec);
+    }
 
     builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
-    if (i == dynamicCandidates.size() - 1)
+    if (i == dynamicCandidates.size() - 1) {
+      lower::SymMapScope scope(symTable);
       genVariant(staticFallback);
+    }
   }
 }
 
