@@ -49,3 +49,34 @@ subroutine test_dynamic_target(flag, a, n)
     a(i) = a(i) + 1.0
   end do
 end subroutine
+
+! Dynamic condition with collapse(3): verifies that IV flags are set on
+! all nested loop IVs, not just the outermost.
+! CHECK-LABEL: func.func @_QPtest_dynamic_collapse(
+! CHECK:         fir.if
+! CHECK:           omp.target
+! CHECK:             omp.teams
+! CHECK:               omp.parallel
+! CHECK:                 omp.distribute
+! CHECK:                   omp.wsloop
+! CHECK:                     omp.simd
+! CHECK:                       omp.loop_nest {{.*}} collapse(3)
+! CHECK:         } else {
+! CHECK:           omp.parallel
+! CHECK:             omp.wsloop
+! CHECK:               omp.simd
+! CHECK:                 omp.loop_nest {{.*}} collapse(3)
+subroutine test_dynamic_collapse(flag, lo, up)
+  integer :: i, j, k
+  integer, dimension(3) :: lo, up
+  logical :: flag
+  !$omp metadirective &
+  !$omp & when(user={condition(flag)}: target teams distribute parallel do simd collapse(3)) &
+  !$omp & otherwise(parallel do simd collapse(3))
+  do k = lo(3), up(3)
+  do j = lo(2), up(2)
+  do i = lo(1), up(1)
+  end do
+  end do
+  end do
+end subroutine
