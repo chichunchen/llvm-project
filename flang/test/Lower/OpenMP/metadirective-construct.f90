@@ -141,6 +141,34 @@ subroutine test_construct_not_enclosing()
   !$omp & default(nothing)
 end subroutine
 
+subroutine test_compound_no_context()
+  integer :: i
+  ! construct={parallel do} with no enclosing construct — should fall back.
+  !$omp metadirective &
+  !$omp & when(construct={parallel do}: taskwait) &
+  !$omp & default(nothing)
+end subroutine
+
+subroutine test_compound_partial_match()
+  integer :: i
+  ! Inside only parallel (no do) — construct={parallel do} should not match.
+  !$omp parallel
+  !$omp metadirective &
+  !$omp & when(construct={parallel do}: taskwait) &
+  !$omp & default(nothing)
+  !$omp end parallel
+end subroutine
+
+subroutine test_compound_target_partial()
+  integer :: i
+  ! Inside only target — construct={target parallel do} should not match.
+  !$omp target
+  !$omp metadirective &
+  !$omp & when(construct={target parallel do}: taskwait) &
+  !$omp & default(nothing)
+  !$omp end target
+end subroutine
+
 !--- otherwise.f90
 subroutine test_construct_parallel()
   !$omp parallel
@@ -261,6 +289,34 @@ subroutine test_construct_not_enclosing()
   !$omp & otherwise(taskwait)
 end subroutine
 
+subroutine test_compound_no_context()
+  integer :: i
+  ! construct={parallel do} with no enclosing construct — should fall back.
+  !$omp metadirective &
+  !$omp & when(construct={parallel do}: nothing) &
+  !$omp & otherwise(taskwait)
+end subroutine
+
+subroutine test_compound_partial_match()
+  integer :: i
+  ! Inside only parallel (no do) — construct={parallel do} should not match.
+  !$omp parallel
+  !$omp metadirective &
+  !$omp & when(construct={parallel do}: nothing) &
+  !$omp & otherwise(taskwait)
+  !$omp end parallel
+end subroutine
+
+subroutine test_compound_target_partial()
+  integer :: i
+  ! Inside only target — construct={target parallel do} should not match.
+  !$omp target
+  !$omp metadirective &
+  !$omp & when(construct={target parallel do}: nothing) &
+  !$omp & otherwise(taskwait)
+  !$omp end target
+end subroutine
+
 ! DEFAULT-LABEL: func.func @_QPtest_construct_parallel()
 ! DEFAULT:         omp.parallel {
 ! DEFAULT:           omp.taskwait
@@ -365,6 +421,18 @@ end subroutine
 ! DEFAULT-NOT:     omp.taskwait
 ! DEFAULT:         return
 
+! DEFAULT-LABEL: func.func @_QPtest_compound_no_context()
+! DEFAULT-NOT:     omp.taskwait
+! DEFAULT:         return
+
+! DEFAULT-LABEL: func.func @_QPtest_compound_partial_match()
+! DEFAULT-NOT:     omp.taskwait
+! DEFAULT:         return
+
+! DEFAULT-LABEL: func.func @_QPtest_compound_target_partial()
+! DEFAULT-NOT:     omp.taskwait
+! DEFAULT:         return
+
 ! OTHERWISE-LABEL: func.func @_QPtest_construct_parallel()
 ! OTHERWISE:         omp.parallel {
 ! OTHERWISE:           omp.taskwait
@@ -457,3 +525,19 @@ end subroutine
 ! OTHERWISE-LABEL: func.func @_QPtest_construct_not_enclosing()
 ! OTHERWISE:         omp.taskwait
 ! OTHERWISE:         return
+
+! OTHERWISE-LABEL: func.func @_QPtest_compound_no_context()
+! OTHERWISE:         omp.taskwait
+! OTHERWISE:         return
+
+! OTHERWISE-LABEL: func.func @_QPtest_compound_partial_match()
+! OTHERWISE:         omp.parallel {
+! OTHERWISE:           omp.taskwait
+! OTHERWISE:           omp.terminator
+! OTHERWISE:         }
+
+! OTHERWISE-LABEL: func.func @_QPtest_compound_target_partial()
+! OTHERWISE:         omp.target {
+! OTHERWISE:           omp.taskwait
+! OTHERWISE:           omp.terminator
+! OTHERWISE:         }

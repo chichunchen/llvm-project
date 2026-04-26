@@ -34,6 +34,7 @@
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/StringRef.h>
+#include <llvm/Frontend/OpenMP/OMP.h>
 #include <llvm/Support/CommandLine.h>
 
 #include <functional>
@@ -702,6 +703,12 @@ pft::Evaluation *getNestedDoConstruct(pft::Evaluation &eval) {
     //     <<DoConstruct>> -> 7
     if (nested.getIf<parser::NonLabelDoStmt>())
       continue;
+    // Between collapsed DO loops, there can be standalone OpenMP constructs
+    // (e.g. a metadirective that resolves to nothing).
+    if (nested.getIf<parser::OpenMPConstruct>())
+      continue;
+    if (nested.isEndStmt())
+      continue;
     assert(nested.getIf<parser::DoConstruct>() &&
            "Unexpected construct in the nested evaluations");
     return &nested;
@@ -1278,6 +1285,31 @@ getTraitScore(const std::optional<parser::OmpTraitSelector::Properties> &props,
   return &*scoreStorage;
 }
 
+/// Map a leaf directive to its construct trait property.
+/// Fortran "do" maps to the "for" construct trait. Returns invalid for
+/// directives that have no construct trait (e.g. distribute).
+static llvm::omp::TraitProperty
+getConstructTraitForDirective(llvm::omp::Directive dir) {
+  using TP = llvm::omp::TraitProperty;
+  switch (dir) {
+  case llvm::omp::Directive::OMPD_target:
+    return TP::construct_target_target;
+  case llvm::omp::Directive::OMPD_teams:
+    return TP::construct_teams_teams;
+  case llvm::omp::Directive::OMPD_parallel:
+    return TP::construct_parallel_parallel;
+  case llvm::omp::Directive::OMPD_do:
+  case llvm::omp::Directive::OMPD_for:
+    return TP::construct_for_for;
+  case llvm::omp::Directive::OMPD_simd:
+    return TP::construct_simd_simd;
+  case llvm::omp::Directive::OMPD_dispatch:
+    return TP::construct_dispatch_dispatch;
+  default:
+    return TP::invalid;
+  }
+}
+
 /// Populate a VariantMatchInfo from context selector.
 /// For user conditions, attempts constant folding. Non-constant conditions
 /// are recorded as user_condition_unknown and the expression pointer is
@@ -1315,11 +1347,26 @@ void makeVariantMatchInfo(llvm::omp::VariantMatchInfo &vmi,
       if (props || set != llvm::omp::TraitSet::construct)
         continue;
 
-      // Construct traits with no properties: the selector is the property.
-      llvm::omp::TraitProperty propKind =
-          llvm::omp::getOpenMPContextTraitPropertyForSelector(selector);
-      if (propKind != llvm::omp::TraitProperty::invalid)
-        vmi.addTrait(set, propKind, selectorName.ToString(), scorePtr);
+      // Construct traits with no properties: the selector name itself is the
+      // construct trait. Compound directive names (e.g. "parallel do") must be
+      // decomposed into their leaf constructs so that the context matcher can
+      // compare them against the enclosing construct stack.
+      if (const auto *dir =
+              std::get_if<llvm::omp::Directive>(&selectorName.u)) {
+        for (llvm::omp::Directive leaf :
+             llvm::omp::getLeafConstructsOrSelf(*dir)) {
+          llvm::omp::TraitProperty propKind =
+              getConstructTraitForDirective(leaf);
+          if (propKind != llvm::omp::TraitProperty::invalid)
+            vmi.addTrait(set, propKind, /*RawString=*/"", scorePtr);
+        }
+      } else {
+        // Non-directive construct selector (string-based lookup succeeded).
+        llvm::omp::TraitProperty propKind =
+            llvm::omp::getOpenMPContextTraitPropertyForSelector(selector);
+        if (propKind != llvm::omp::TraitProperty::invalid)
+          vmi.addTrait(set, propKind, selectorName.ToString(), scorePtr);
+      }
     }
   }
 }

@@ -74,6 +74,14 @@ static void processHostEvalClauses(lower::AbstractConverter &converter,
                                    lower::pft::Evaluation &eval,
                                    mlir::Location loc);
 
+static void processHostEvalClauses(lower::AbstractConverter &converter,
+                                   semantics::SemanticsContext &semaCtx,
+                                   lower::StatementContext &stmtCtx,
+                                   lower::pft::Evaluation &eval,
+                                   mlir::Location loc,
+                                   const ConstructQueue &queue,
+                                   ConstructQueue::const_iterator item);
+
 namespace {
 /// Structure holding information that is needed to pass host-evaluated
 /// information to later lowering stages.
@@ -85,6 +93,13 @@ public:
                                        lower::StatementContext &,
                                        lower::pft::Evaluation &,
                                        mlir::Location);
+  friend void ::processHostEvalClauses(lower::AbstractConverter &,
+                                       semantics::SemanticsContext &,
+                                       lower::StatementContext &,
+                                       lower::pft::Evaluation &,
+                                       mlir::Location,
+                                       const ConstructQueue &,
+                                       ConstructQueue::const_iterator);
 
   /// Fill \c vars with values stored in \c ops.
   ///
@@ -564,6 +579,61 @@ static void processHostEvalClauses(lower::AbstractConverter &converter,
   List<lower::omp::Clause> clauses;
   extractClauses(eval, clauses);
   processEval(eval, clauses);
+}
+
+/// Queue-based overload for host-eval clause processing. For normal target
+/// constructs, delegates to the eval-tree-based overload. For metadirective
+/// (where nested constructs exist only in the construct queue), walks queue
+/// items directly.
+static void processHostEvalClauses(lower::AbstractConverter &converter,
+                                   semantics::SemanticsContext &semaCtx,
+                                   lower::StatementContext &stmtCtx,
+                                   lower::pft::Evaluation &eval,
+                                   mlir::Location loc,
+                                   const ConstructQueue &queue,
+                                   ConstructQueue::const_iterator item) {
+  const auto *ompEval = eval.getIf<parser::OpenMPConstruct>();
+  if (ompEval && llvm::omp::allTargetSet.test(
+                     parser::omp::GetOmpDirectiveName(*ompEval).v)) {
+    processHostEvalClauses(converter, semaCtx, stmtCtx, eval, loc);
+    return;
+  }
+
+  // Metadirective path: walk the construct queue for nested directives.
+  using namespace llvm::omp;
+
+  HostEvalInfo *hostInfo = getHostEvalInfoStackTop(converter);
+  assert(hostInfo && "expected HOST_EVAL info structure");
+
+  // Find the last loop-like directive in the queue — that's the one whose
+  // collapse clause governs the loop nest.
+  ConstructQueue::const_iterator loopItem = queue.end();
+  for (auto it = std::next(item); it != queue.end(); ++it) {
+    if (it->id == OMPD_distribute || it->id == OMPD_do || it->id == OMPD_loop)
+      loopItem = it;
+  }
+
+  for (auto it = std::next(item); it != queue.end(); ++it) {
+    ClauseProcessor cp(converter, semaCtx, it->clauses);
+    switch (it->id) {
+    case OMPD_teams:
+      cp.processNumTeams(stmtCtx, hostInfo->ops);
+      cp.processThreadLimit(stmtCtx, hostInfo->ops);
+      break;
+    case OMPD_parallel:
+      cp.processNumThreads(stmtCtx, hostInfo->ops);
+      break;
+    case OMPD_distribute:
+    case OMPD_do:
+    case OMPD_loop:
+      if (it == loopItem)
+        cp.processCollapse(loc, eval, hostInfo->ops, hostInfo->ops,
+                           hostInfo->iv);
+      break;
+    default:
+      break;
+    }
+  }
 }
 
 static lower::pft::Evaluation *
@@ -1768,7 +1838,8 @@ static void genTargetClauses(
     DefaultMapsTy &defaultMaps,
     llvm::SmallVectorImpl<const semantics::Symbol *> &hasDeviceAddrSyms,
     llvm::SmallVectorImpl<const semantics::Symbol *> &isDevicePtrSyms,
-    llvm::SmallVectorImpl<const semantics::Symbol *> &mapSyms) {
+    llvm::SmallVectorImpl<const semantics::Symbol *> &mapSyms,
+    const ConstructQueue &queue, ConstructQueue::const_iterator item) {
   ClauseProcessor cp(converter, semaCtx, clauses);
   cp.processBare(clauseOps);
   cp.processDefaultMap(stmtCtx, defaultMaps);
@@ -1777,7 +1848,7 @@ static void genTargetClauses(
   cp.processHasDeviceAddr(stmtCtx, clauseOps, hasDeviceAddrSyms);
   if (HostEvalInfo *hostEvalInfo = getHostEvalInfoStackTop(converter)) {
     // Only process host_eval if compiling for the host device.
-    processHostEvalClauses(converter, semaCtx, stmtCtx, eval, loc);
+    processHostEvalClauses(converter, semaCtx, stmtCtx, eval, loc, queue, item);
     hostEvalInfo->collectValues(clauseOps.hostEvalVars);
   }
   cp.processIf(llvm::omp::Directive::OMPD_target, clauseOps);
@@ -2798,7 +2869,7 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
       hasDeviceAddrSyms;
   genTargetClauses(converter, semaCtx, symTable, stmtCtx, eval, item->clauses,
                    loc, clauseOps, defaultMaps, hasDeviceAddrSyms,
-                   isDevicePtrSyms, mapSyms);
+                   isDevicePtrSyms, mapSyms, queue, item);
 
   if (!isDevicePtrSyms.empty()) {
     // is_device_ptr maps get duplicated so the clause and synthesized
@@ -4564,15 +4635,52 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
 
       // Semantics sets OmpPreDetermined/OmpPrivate on IVs for
       // OpenMPLoopConstruct, but metadirective bypasses that path.
-      if (auto *doConstruct =
-              eval.getNestedEvaluations().back().getIf<parser::DoConstruct>()) {
-        if (const auto &loopCtrl = doConstruct->GetLoopControl()) {
+      // Compute the affected loop depth (from collapse clause) and the
+      // appropriate IV DSA based on the selected directive, matching the
+      // logic in OmpAttributeVisitor::PrivatizeAssociatedLoopIndex.
+      int64_t collapseVal = getCollapseValue(variantClauses);
+      bool isSimd = llvm::any_of(queue, [](const auto &item) {
+        return item.id == llvm::omp::Directive::OMPD_simd;
+      });
+      unsigned version = semaCtx.langOptions().OpenMPVersion;
+      semantics::Symbol::Flag ivDSA;
+      if (!isSimd) {
+        ivDSA = semantics::Symbol::Flag::OmpPrivate;
+      } else if (collapseVal == 1 && version < 60) {
+        ivDSA = semantics::Symbol::Flag::OmpLinear;
+      } else {
+        ivDSA = semantics::Symbol::Flag::OmpLastPrivate;
+      }
+
+      // Walk the affected loop nest and flag each IV.
+      const parser::DoConstruct *loop = nullptr;
+      for (int64_t i = 0; i < collapseVal; ++i) {
+        if (i == 0) {
+          // First loop is the spliced DoConstruct at the end of nested evals.
+          loop = eval.getNestedEvaluations()
+                     .back()
+                     .getIf<parser::DoConstruct>();
+        } else if (loop) {
+          // Subsequent loops are nested inside the previous loop body.
+          // Iterate the block directly since parser::Unwrap doesn't handle
+          // std::list.
+          const parser::DoConstruct *inner = nullptr;
+          for (const auto &epc : std::get<parser::Block>(loop->t)) {
+            inner = parser::Unwrap<parser::DoConstruct>(epc);
+            if (inner)
+              break;
+          }
+          loop = inner;
+        }
+        if (!loop)
+          break;
+        if (const auto &loopCtrl = loop->GetLoopControl()) {
           if (auto *bounds =
                   std::get_if<parser::LoopControl::Bounds>(&loopCtrl->u)) {
             if (auto *sym = bounds->Name().thing.symbol) {
               sym->set(semantics::Symbol::Flag::OmpPreDetermined);
               if (!sym->test(semantics::Symbol::Flag::OmpLinear))
-                sym->set(semantics::Symbol::Flag::OmpPrivate);
+                sym->set(ivDSA);
             }
           }
         }
