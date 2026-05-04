@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 //
 // Mark function calls inside OpenMP SIMD regions with omp.simd_inline_boost
-// so that the FIR-to-LLVM conversion can set "function-inline-threshold" on the
-// resulting llvm.call, enabling aggressive inlining for vectorization.
+// so FIR-to-LLVM conversion can add an LLVM inline-threshold bonus, enabling
+// more aggressive inlining for vectorization.
 //
 //===----------------------------------------------------------------------===//
 

@@ -31,8 +31,8 @@ subroutine no_simd(x)
     end function
   end interface
   ! CHECK: call {{.*}}@foo_({{.*}})
-  ! CHECK-NOT: function-inline-threshold
+  ! CHECK-NOT: call {{.*}}@foo_({{.*}}) #[[BOOST]]
   x = foo(x)
 end subroutine
 
-! CHECK: attributes #[[BOOST]] = {{{.*}}"function-inline-threshold"="2000"{{.*}}}
+! CHECK: attributes #[[BOOST]] = {{{.*}}"function-inline-threshold-bonus"="2000"{{.*}}}
