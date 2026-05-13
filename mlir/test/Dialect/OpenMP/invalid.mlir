@@ -3017,7 +3017,7 @@ func.func @target_private_count_mismatch(%arg0: !llvm.ptr) {
   "omp.target"(%arg0) ({
   ^bb0(%arg1 : !llvm.ptr):
     omp.terminator
-  }) {operandSegmentSizes = array<i32: 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0>,
+  }) {operandSegmentSizes = array<i32: 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0>,
        private_syms = [@x.privatizer, @y.privatizer]} : (!llvm.ptr) -> ()
   return
 }
