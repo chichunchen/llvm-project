@@ -3950,7 +3950,7 @@ func.func @iterator_yield_type_mismatch(%lb : index, %ub : index, %st : index) {
 
 func.func @map_iterated_not_iterator(%it : !omp.iterated<!llvm.ptr>) {
   // expected-error @below {{'omp.target_update' op 'map_iterated' arguments must be defined by 'omp.iterator' ops}}
-  omp.target_update map_entries(%it : !omp.iterated<!llvm.ptr>)
+  omp.target_update map_iterated(%it : !omp.iterated<!llvm.ptr>)
   return
 }
 
@@ -3962,7 +3962,7 @@ func.func @map_iterated_yield_not_map_info(%lb : index, %ub : index, %st : index
     omp.yield(%addr : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{'omp.target_enter_data' op 'map_iterated' iterator body must yield a value defined by 'omp.map.info'}}
-  omp.target_enter_data map_entries(%it : !omp.iterated<!llvm.ptr>) {}
+  omp.target_enter_data map_iterated(%it : !omp.iterated<!llvm.ptr>) {}
   return
 }
 
@@ -3974,7 +3974,7 @@ func.func @map_iterated_yield_not_map_info_exit(%lb : index, %ub : index, %st : 
     omp.yield(%addr : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{'omp.target_exit_data' op 'map_iterated' iterator body must yield a value defined by 'omp.map.info'}}
-  omp.target_exit_data map_entries(%it : !omp.iterated<!llvm.ptr>) {}
+  omp.target_exit_data map_iterated(%it : !omp.iterated<!llvm.ptr>) {}
   return
 }
 
@@ -3988,7 +3988,7 @@ func.func @target_enter_data_map_iterated_invalid_from(%lb : index, %ub : index,
     omp.yield(%m : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{to and alloc map types are permitted}}
-  omp.target_enter_data map_entries(%it : !omp.iterated<!llvm.ptr>) {}
+  omp.target_enter_data map_iterated(%it : !omp.iterated<!llvm.ptr>) {}
   return
 }
 
@@ -4002,7 +4002,7 @@ func.func @target_exit_data_map_iterated_invalid_to(%lb : index, %ub : index,
     omp.yield(%m : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{from, release and delete map types are permitted}}
-  omp.target_exit_data map_entries(%it : !omp.iterated<!llvm.ptr>) {}
+  omp.target_exit_data map_iterated(%it : !omp.iterated<!llvm.ptr>) {}
   return
 }
 
@@ -4016,7 +4016,7 @@ func.func @target_update_map_iterated_invalid_delete(%lb : index, %ub : index,
     omp.yield(%m : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{at least one of to or from map types must be specified, other map types are not permitted}}
-  omp.target_update map_entries(%it : !omp.iterated<!llvm.ptr>)
+  omp.target_update map_iterated(%it : !omp.iterated<!llvm.ptr>)
   return
 }
 
@@ -4031,7 +4031,7 @@ func.func @target_update_map_iterated_invalid_conflict(%lb : index, %ub : index,
     omp.yield(%m : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{either to or from map types can be specified, not both}}
-  omp.target_update map_entries(%mapv, %it : !llvm.ptr, !omp.iterated<!llvm.ptr>)
+  omp.target_update map_entries(%mapv : !llvm.ptr) map_iterated(%it : !omp.iterated<!llvm.ptr>)
   return
 }
 
@@ -4045,7 +4045,7 @@ func.func @target_data_map_iterated_invalid_delete(%lb : index, %ub : index,
     omp.yield(%m : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{to, from, tofrom and alloc map types are permitted}}
-  omp.target_data map_entries(%it : !omp.iterated<!llvm.ptr>) {}
+  omp.target_data map_iterated(%it : !omp.iterated<!llvm.ptr>) {}
   return
 }
 
@@ -4060,9 +4060,9 @@ func.func @target_map_iterated_invalid_delete(%lb : index, %ub : index,
     omp.yield(%m : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{to, from, tofrom and alloc map types are permitted}}
-  omp.target map_entries(%mapv -> %arg0 : !llvm.ptr) {
+  omp.target map_iterated(%it : !omp.iterated<!llvm.ptr>) map_entries(%mapv -> %arg0 : !llvm.ptr) {
     omp.terminator
-  } map_iterated_entries(%it : !omp.iterated<!llvm.ptr>)
+  }
   return
 }
 
@@ -4071,7 +4071,7 @@ func.func @target_map_iterated_invalid_delete(%lb : index, %ub : index,
 omp.declare_mapper @declare_mapper_iterated_not_iterator : !llvm.struct<"mapper_type", (i32)> {
 ^bb0(%arg: !llvm.ptr, %it: !omp.iterated<!llvm.ptr>):
   // expected-error @below {{'omp.declare_mapper.info' op 'map_iterated' arguments must be defined by 'omp.iterator' ops}}
-  omp.declare_mapper.info map_entries(%it : !omp.iterated<!llvm.ptr>)
+  omp.declare_mapper.info map_iterated(%it : !omp.iterated<!llvm.ptr>)
 }
 
 // -----
@@ -4085,7 +4085,7 @@ omp.declare_mapper @declare_mapper_iterated_yield_not_map_info : !llvm.struct<"m
     omp.yield(%arg : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
   // expected-error @below {{'omp.declare_mapper.info' op 'map_iterated' iterator body must yield a value defined by 'omp.map.info'}}
-  omp.declare_mapper.info map_entries(%it : !omp.iterated<!llvm.ptr>)
+  omp.declare_mapper.info map_iterated(%it : !omp.iterated<!llvm.ptr>)
 }
 
 // -----
