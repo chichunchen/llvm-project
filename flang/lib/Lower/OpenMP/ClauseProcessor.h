@@ -157,11 +157,15 @@ public:
   // The optional parameter mapObjects is used to store the original Fortran
   // objects for the map operands. It may be used later on to create the
   // block_arguments for some of the directives that require it.
-  bool processMap(mlir::Location currentLocation,
-                  lower::StatementContext &stmtCtx,
-                  mlir::omp::MapClauseOps &result,
-                  llvm::omp::Directive directive = llvm::omp::OMPD_unknown,
-                  llvm::SmallVectorImpl<Object> *mapObjects = nullptr) const;
+  // The optional mapIteratedCapture parameters are used by target lowering
+  // to bind the target region to stable base objects for iterated maps.
+  bool processMap(
+      mlir::Location currentLocation, lower::StatementContext &stmtCtx,
+      mlir::omp::MapClauseOps &result,
+      llvm::omp::Directive directive = llvm::omp::OMPD_unknown,
+      llvm::SmallVectorImpl<Object> *mapObjects = nullptr,
+      llvm::SmallVectorImpl<mlir::Value> *mapIteratedCaptureVars = nullptr,
+      llvm::SmallVectorImpl<Object> *mapIteratedCaptureObjects = nullptr) const;
   bool processMotionClauses(lower::StatementContext &stmtCtx,
                             mlir::omp::MapClauseOps &result);
   bool processNontemporal(mlir::omp::NontemporalClauseOps &result) const;

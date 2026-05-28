@@ -19,8 +19,9 @@ mlir::Block *genEntryBlock(mlir::OpBuilder &builder, const EntryBlockArgs &args,
   llvm::SmallVector<mlir::Location> locs;
   unsigned numVars = args.hasDeviceAddrVars.size() + args.hostEvalVars.size() +
       args.inReductionVars.size() + args.mapVars.size() + args.privVars.size() +
-      args.reductionVars.size() + args.taskReductionVars.size() +
-      args.useDeviceAddrVars.size() + args.useDevicePtrVars.size();
+      args.mapIteratedCaptureVars.size() + args.reductionVars.size() +
+      args.taskReductionVars.size() + args.useDeviceAddrVars.size() +
+      args.useDevicePtrVars.size();
   types.reserve(numVars);
   locs.reserve(numVars);
 
@@ -37,6 +38,7 @@ mlir::Block *genEntryBlock(mlir::OpBuilder &builder, const EntryBlockArgs &args,
   extractTypeLoc(args.hostEvalVars);
   extractTypeLoc(args.inReductionVars);
   extractTypeLoc(args.mapVars);
+  extractTypeLoc(args.mapIteratedCaptureVars);
   extractTypeLoc(args.privVars);
   extractTypeLoc(args.reductionVars);
   extractTypeLoc(args.taskReductionVars);

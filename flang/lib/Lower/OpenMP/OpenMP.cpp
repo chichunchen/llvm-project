@@ -107,6 +107,7 @@ struct ObjectEntryBlockArgs {
   llvm::ArrayRef<mlir::Value> hostEvalVars;
   ObjectEntryBlockArgsEntry inReduction;
   ObjectEntryBlockArgsEntry map;
+  ObjectEntryBlockArgsEntry mapIteratedCapture;
   ObjectEntryBlockArgsEntry priv;
   ObjectEntryBlockArgsEntry reduction;
   ObjectEntryBlockArgsEntry taskReduction;
@@ -115,7 +116,8 @@ struct ObjectEntryBlockArgs {
 
   bool isValid() const {
     return hasDeviceAddr.isValid() && inReduction.isValid() && map.isValid() &&
-           priv.isValid() && reduction.isValid() && taskReduction.isValid() &&
+           mapIteratedCapture.isValid() && priv.isValid() &&
+           reduction.isValid() && taskReduction.isValid() &&
            useDeviceAddr.isValid() && useDevicePtr.isValid();
   }
 
@@ -129,6 +131,7 @@ struct ObjectEntryBlockArgs {
     appendSyms(hasDeviceAddr);
     appendSyms(inReduction);
     appendSyms(map);
+    appendSyms(mapIteratedCapture);
     appendSyms(priv);
     appendSyms(reduction);
     appendSyms(taskReduction);
@@ -139,9 +142,9 @@ struct ObjectEntryBlockArgs {
 
   auto getVars() const {
     return llvm::concat<const mlir::Value>(
-        hasDeviceAddr.vars, hostEvalVars, inReduction.vars, map.vars, priv.vars,
-        reduction.vars, taskReduction.vars, useDeviceAddr.vars,
-        useDevicePtr.vars);
+        hasDeviceAddr.vars, hostEvalVars, inReduction.vars, map.vars,
+        mapIteratedCapture.vars, priv.vars, reduction.vars, taskReduction.vars,
+        useDeviceAddr.vars, useDevicePtr.vars);
   }
 
   Fortran::common::openmp::EntryBlockArgs asEntryBlockArgs() const {
@@ -150,6 +153,7 @@ struct ObjectEntryBlockArgs {
     args.hostEvalVars = hostEvalVars;
     args.inReductionVars = inReduction.vars;
     args.mapVars = map.vars;
+    args.mapIteratedCaptureVars = mapIteratedCapture.vars;
     args.privVars = priv.vars;
     args.reductionVars = reduction.vars;
     args.taskReductionVars = taskReduction.vars;
@@ -440,6 +444,8 @@ static void bindEntryBlockArgs(lower::AbstractConverter &converter,
   bindPrivateLike(args.inReduction.objects, args.inReduction.vars,
                   op.getInReductionBlockArgs());
   bindMapLike(args.map.objects, op.getMapBlockArgs());
+  bindMapLike(args.mapIteratedCapture.objects,
+              op.getMapIteratedCaptureBlockArgs());
   bindPrivateLike(args.priv.objects, args.priv.vars, op.getPrivateBlockArgs());
   bindPrivateLike(args.reduction.objects, args.reduction.vars,
                   op.getReductionBlockArgs());
@@ -1874,7 +1880,8 @@ genTargetClauses(lower::AbstractConverter &converter,
                  DefaultMapsTy &defaultMaps,
                  llvm::SmallVectorImpl<Object> &hasDeviceAddrObjects,
                  llvm::SmallVectorImpl<Object> &isDevicePtrObjects,
-                 llvm::SmallVectorImpl<Object> &mapObjects) {
+                 llvm::SmallVectorImpl<Object> &mapObjects,
+                 llvm::SmallVectorImpl<Object> &mapIteratedCaptureObjects) {
   ClauseProcessor cp(converter, semaCtx, clauses);
   cp.processBare(clauseOps);
   cp.processDefaultMap(stmtCtx, defaultMaps);
@@ -1888,8 +1895,9 @@ genTargetClauses(lower::AbstractConverter &converter,
   }
   cp.processIf(llvm::omp::Directive::OMPD_target, clauseOps);
   cp.processIsDevicePtr(stmtCtx, clauseOps, isDevicePtrObjects);
-  cp.processMap(loc, stmtCtx, clauseOps, llvm::omp::Directive::OMPD_unknown,
-                &mapObjects);
+  cp.processMap(loc, stmtCtx, clauseOps, llvm::omp::Directive::OMPD_target,
+                &mapObjects, &clauseOps.mapIteratedCaptureVars,
+                &mapIteratedCaptureObjects);
   cp.processNowait(clauseOps);
   cp.processThreadLimit(stmtCtx, clauseOps);
 
@@ -2827,14 +2835,18 @@ static bool isDuplicateMappedSymbol(
     const semantics::Symbol &sym,
     const llvm::SetVector<const semantics::Symbol *> &privatizedSyms,
     llvm::ArrayRef<Object> hasDevObjects, llvm::ArrayRef<Object> mappedObjects,
+    llvm::ArrayRef<Object> mapIteratedCaptureObjects,
     llvm::ArrayRef<Object> isDevicePtrObjects) {
   llvm::SmallVector<const semantics::Symbol *> concatSyms;
   concatSyms.reserve(privatizedSyms.size() + hasDevObjects.size() +
-                     mappedObjects.size() + isDevicePtrObjects.size());
+                     mappedObjects.size() + mapIteratedCaptureObjects.size() +
+                     isDevicePtrObjects.size());
   concatSyms.append(privatizedSyms.begin(), privatizedSyms.end());
   llvm::transform(hasDevObjects, std::back_inserter(concatSyms),
                   [](const Object &object) { return object.sym(); });
   llvm::transform(mappedObjects, std::back_inserter(concatSyms),
+                  [](const Object &object) { return object.sym(); });
+  llvm::transform(mapIteratedCaptureObjects, std::back_inserter(concatSyms),
                   [](const Object &object) { return object.sym(); });
   llvm::transform(isDevicePtrObjects, std::back_inserter(concatSyms),
                   [](const Object &object) { return object.sym(); });
@@ -2931,11 +2943,11 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
 
   mlir::omp::TargetOperands clauseOps;
   DefaultMapsTy defaultMaps;
-  llvm::SmallVector<Object> mapObjects, hasDeviceAddrObjects,
-      isDevicePtrObjects;
+  llvm::SmallVector<Object> mapObjects, mapIteratedCaptureObjects,
+      hasDeviceAddrObjects, isDevicePtrObjects;
   genTargetClauses(converter, semaCtx, symTable, stmtCtx, eval, item->clauses,
                    loc, clauseOps, defaultMaps, hasDeviceAddrObjects,
-                   isDevicePtrObjects, mapObjects);
+                   isDevicePtrObjects, mapObjects, mapIteratedCaptureObjects);
 
   if (!isDevicePtrObjects.empty()) {
     // is_device_ptr maps get duplicated so the clause and synthesized
@@ -3022,9 +3034,9 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
         !symbolsWithDynamicSubstring.contains(&sym.GetUltimate()))
       return;
 
-    if (!isDuplicateMappedSymbol(sym, dsp.getAllSymbolsToPrivatize(),
-                                 hasDeviceAddrObjects, mapObjects,
-                                 isDevicePtrObjects)) {
+    if (!isDuplicateMappedSymbol(
+            sym, dsp.getAllSymbolsToPrivatize(), hasDeviceAddrObjects,
+            mapObjects, mapIteratedCaptureObjects, isDevicePtrObjects)) {
       if (const auto *details =
               sym.template detailsIf<semantics::HostAssocDetails>())
         converter.copySymbolBinding(details->symbol(), sym);
@@ -3123,6 +3135,8 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
   // TODO: Add in_reduction syms and vars.
   args.map.objects = mapObjects;
   args.map.vars = mapBaseValues;
+  args.mapIteratedCapture.objects = mapIteratedCaptureObjects;
+  args.mapIteratedCapture.vars = clauseOps.mapIteratedCaptureVars;
   args.priv.objects = makeObjects(dsp.getDelayedPrivSymbols());
   args.priv.vars = clauseOps.privateVars;
 

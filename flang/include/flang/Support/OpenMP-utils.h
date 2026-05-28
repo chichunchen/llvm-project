@@ -23,6 +23,7 @@ struct EntryBlockArgs {
   llvm::ArrayRef<mlir::Value> hostEvalVars;
   llvm::ArrayRef<mlir::Value> inReductionVars;
   llvm::ArrayRef<mlir::Value> mapVars;
+  llvm::ArrayRef<mlir::Value> mapIteratedCaptureVars;
   llvm::ArrayRef<mlir::Value> privVars;
   llvm::ArrayRef<mlir::Value> reductionVars;
   llvm::ArrayRef<mlir::Value> taskReductionVars;
@@ -31,8 +32,8 @@ struct EntryBlockArgs {
 
   auto getVars() const {
     return llvm::concat<const mlir::Value>(hasDeviceAddrVars, hostEvalVars,
-        inReductionVars, mapVars, privVars, reductionVars, taskReductionVars,
-        useDeviceAddrVars, useDevicePtrVars);
+        inReductionVars, mapVars, mapIteratedCaptureVars, privVars,
+        reductionVars, taskReductionVars, useDeviceAddrVars, useDevicePtrVars);
   }
 };
 

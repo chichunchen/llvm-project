@@ -1857,7 +1857,9 @@ getMapperIdentifier(lower::AbstractConverter &converter,
 bool ClauseProcessor::processMap(
     mlir::Location currentLocation, lower::StatementContext &stmtCtx,
     mlir::omp::MapClauseOps &result, llvm::omp::Directive directive,
-    llvm::SmallVectorImpl<Object> *mapObjects) const {
+    llvm::SmallVectorImpl<Object> *mapObjects,
+    llvm::SmallVectorImpl<mlir::Value> *mapIteratedCaptureVars,
+    llvm::SmallVectorImpl<Object> *mapIteratedCaptureObjects) const {
   // We always require tracking of objects, even if the caller does not,
   // so we create an optionally used local set of objects when the mapObjects
   // argument is not present.
@@ -1865,6 +1867,31 @@ bool ClauseProcessor::processMap(
   llvm::SmallVectorImpl<Object> *ptrMapObjects =
       mapObjects ? mapObjects : &localMapObjects;
   std::map<Object, OmpMapParentAndMemberData> parentMemberIndices;
+  llvm::SmallPtrSet<const Fortran::semantics::Symbol *, 4>
+      mapIteratedCaptureSyms;
+
+  auto addMapIteratedCapture = [&](mlir::Location clauseLocation,
+                                   const omp::Object &object) {
+    if (!mapIteratedCaptureVars || !mapIteratedCaptureObjects)
+      return;
+
+    const semantics::Symbol *sym = object.sym();
+    assert(sym && "expected symbol for iterator object");
+    const semantics::Symbol *ultimate = &sym->GetUltimate();
+    if (!mapIteratedCaptureSyms.insert(ultimate).second)
+      return;
+
+    if (sym->owner().IsDerivedType())
+      TODO(clauseLocation,
+           "target map iterator modifier for derived type components");
+
+    fir::factory::AddrAndBoundsInfo info =
+        Fortran::lower::getDataOperandBaseAddr(
+            converter, converter.getFirOpBuilder(), *sym, clauseLocation,
+            /*unwrapFirBox=*/false);
+    mapIteratedCaptureVars->push_back(info.addr);
+    mapIteratedCaptureObjects->push_back(object);
+  };
 
   auto process = [&](const omp::clause::Map &clause,
                      const parser::CharBlock &source) {
@@ -1957,6 +1984,7 @@ bool ClauseProcessor::processMap(
           result.mapIterated.push_back(buildIteratedMapEntry(
               converter, semaCtx, clauseLocation, iteratorRanges, object,
               mapperIdName, mapTypeBits, directive));
+          addMapIteratedCapture(clauseLocation, object);
         } else {
           omp::ObjectList singleObj{object};
           processMapObjects(stmtCtx, clauseLocation, singleObj, mapTypeBits,
