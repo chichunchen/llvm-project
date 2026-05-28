@@ -389,6 +389,12 @@ static LogicalResult checkImplementationStatus(Operation &op) {
       result = todo("thread_limit with multi-dimensional values");
   };
   auto checkMap = [&todo](auto op, LogicalResult &result) {
+    if (auto targetOp = llvm::dyn_cast<omp::TargetOp>(op.getOperation())) {
+      if (!targetOp.getMapIteratedCaptureVars().empty()) {
+        result = todo("map iterator target-region captures");
+        return;
+      }
+    }
     if (!op.getMapIterated().empty())
       result = todo("map/motion clause with iterator modifier");
   };

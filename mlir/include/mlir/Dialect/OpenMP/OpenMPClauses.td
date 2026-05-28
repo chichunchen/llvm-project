@@ -927,6 +927,32 @@ class OpenMP_MapClauseSkip<
 def OpenMP_MapClause : OpenMP_MapClauseSkip<>;
 
 //===----------------------------------------------------------------------===//
+// Not in the spec: Clause-like structure to hold map iterator captures.
+//===----------------------------------------------------------------------===//
+
+class OpenMP_MapIteratedCaptureClauseSkip<
+    bit traits = false, bit arguments = false, bit assemblyFormat = false,
+    bit description = false, bit extraClassDeclaration = false>
+    : OpenMP_Clause<traits, arguments, assemblyFormat, description,
+                    extraClassDeclaration> {
+  let arguments =
+      (ins Variadic<OpenMP_PointerLikeType>:$map_iterated_capture_vars);
+
+  let description = [{
+    The optional `map_iterated_capture_vars` holds values defined outside of an
+    `omp.target` region for which corresponding entry block arguments are
+    defined when runtime map entries are provided by `map_iterated`. These
+    operands do not represent map entries.
+  }];
+
+  // Assembly format not defined because this clause must be processed together
+  // with the first region of the operation, as it defines entry block
+  // arguments.
+}
+
+def OpenMP_MapIteratedCaptureClause : OpenMP_MapIteratedCaptureClauseSkip<>;
+
+//===----------------------------------------------------------------------===//
 // Not in the spec: Clause-like structure to memory allocation information.
 //===----------------------------------------------------------------------===//
 

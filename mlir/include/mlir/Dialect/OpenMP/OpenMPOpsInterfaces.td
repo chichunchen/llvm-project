@@ -106,8 +106,12 @@ def BlockArgInReductionClause : BlockArgOpenMPClause<
     "in_reduction", "InReduction", BlockArgHostEvalClause>;
 def BlockArgMapClause : BlockArgOpenMPClause<
     "map", "Map", BlockArgInReductionClause>;
-def BlockArgPrivateClause : BlockArgOpenMPClause<
-    "private", "Private", BlockArgMapClause>;
+def BlockArgMapIteratedCaptureClause
+    : BlockArgOpenMPClause<"map_iterated_capture", "MapIteratedCapture",
+                           BlockArgMapClause>;
+def BlockArgPrivateClause
+    : BlockArgOpenMPClause<"private", "Private",
+                           BlockArgMapIteratedCaptureClause>;
 def BlockArgReductionClause : BlockArgOpenMPClause<
     "reduction", "Reduction", BlockArgPrivateClause>;
 def BlockArgTaskReductionClause : BlockArgOpenMPClause<
@@ -125,10 +129,11 @@ def BlockArgOpenMPOpInterface : OpInterface<"BlockArgOpenMPOpInterface"> {
 
   let cppNamespace = "::mlir::omp";
 
-  defvar clauses = [ BlockArgHasDeviceAddrClause, BlockArgHostEvalClause,
-    BlockArgInReductionClause, BlockArgMapClause, BlockArgPrivateClause,
-    BlockArgReductionClause, BlockArgTaskReductionClause,
-    BlockArgUseDeviceAddrClause, BlockArgUseDevicePtrClause ];
+  defvar clauses = [BlockArgHasDeviceAddrClause, BlockArgHostEvalClause,
+                    BlockArgInReductionClause, BlockArgMapClause,
+                    BlockArgMapIteratedCaptureClause, BlockArgPrivateClause,
+                    BlockArgReductionClause, BlockArgTaskReductionClause,
+                    BlockArgUseDeviceAddrClause, BlockArgUseDevicePtrClause];
 
   let methods = !listconcat(
     !foreach(clause, clauses, clause.varsMethod),

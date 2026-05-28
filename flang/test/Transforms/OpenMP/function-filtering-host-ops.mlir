@@ -460,12 +460,12 @@ module attributes {omp.is_target_device = true} {
     // CHECK-NEXT: %[[PLACEHOLDER:.*]] = fir.alloca !fir.char<1>
     // CHECK-NEXT: %[[ONE:.*]] = arith.constant 1 : i32
     // CHECK-NEXT: %[[EMBOXCHAR:.*]] = fir.emboxchar %[[PLACEHOLDER]], %[[ONE]] : (!fir.ref<!fir.char<1>>, i32) -> !fir.boxchar<1>
-    // CHECK-NEXT: omp.target private(@boxchar_firstprivatizer %[[EMBOXCHAR]] -> %{{.*}} [map_idx=0] : !fir.boxchar<1>)
+    // CHECK-NEXT: omp.target private(@boxchar_firstprivatizer %[[EMBOXCHAR]] -> %{{.*}} : !fir.boxchar<1>)
     %0 = fir.alloca !fir.boxchar<1>
     %1 = fir.dummy_scope : !fir.dscope
     %2:2 = fir.unboxchar %arg : (!fir.boxchar<1>) -> (!fir.ref<!fir.char<1,?>>, index)
     %3:2 = hlfir.declare %2#0 typeparams %2#1 dummy_scope %1 {uniq_name = "arg"} : (!fir.ref<!fir.char<1,?>>, index, !fir.dscope) -> (!fir.boxchar<1>, !fir.ref<!fir.char<1,?>>)
-    omp.target private(@boxchar_firstprivatizer %3#0 -> %arg3 [map_idx=0] : !fir.boxchar<1>) {
+    omp.target private(@boxchar_firstprivatizer %3#0 -> %arg3 : !fir.boxchar<1>) {
       omp.terminator
     }
     return

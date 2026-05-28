@@ -1581,18 +1581,21 @@ def TargetUpdateOp: OpenMP_Op<"target_update", traits = [
 // 2.14.5 target construct
 //===----------------------------------------------------------------------===//
 
-def TargetOp : OpenMP_Op<"target", traits = [
-    AttrSizedOperandSegments, BlockArgOpenMPOpInterface, IsolatedFromAbove,
-    OutlineableOpenMPOpInterface
-  ], clauses = [
-    // TODO: Complete clause list (defaultmap, uses_allocators).
-    OpenMP_AllocateClause, OpenMP_BareClause, OpenMP_DependClause,
-    OpenMP_DeviceClause, OpenMP_DynGroupprivateClause,
-    OpenMP_HasDeviceAddrClause, OpenMP_HostEvalClause,
-    OpenMP_IfClause, OpenMP_InReductionClause, OpenMP_IsDevicePtrClause,
-    OpenMP_MapClauseSkip<assemblyFormat = true>, OpenMP_NowaitClause,
-    OpenMP_PrivateClause, OpenMP_ThreadLimitClause
-  ], singleRegion = true> {
+def TargetOp
+    : OpenMP_Op<"target",
+                traits = [AttrSizedOperandSegments, BlockArgOpenMPOpInterface,
+                          IsolatedFromAbove, OutlineableOpenMPOpInterface],
+                clauses = [
+                    // TODO: Complete clause list (defaultmap, uses_allocators).
+                    OpenMP_AllocateClause, OpenMP_BareClause,
+                    OpenMP_DependClause, OpenMP_DeviceClause,
+                    OpenMP_DynGroupprivateClause, OpenMP_HasDeviceAddrClause,
+                    OpenMP_HostEvalClause, OpenMP_IfClause,
+                    OpenMP_InReductionClause, OpenMP_IsDevicePtrClause,
+                    OpenMP_MapClauseSkip<assemblyFormat = true>,
+                    OpenMP_MapIteratedCaptureClause, OpenMP_NowaitClause,
+                    OpenMP_PrivateClause, OpenMP_ThreadLimitClause],
+                singleRegion = true> {
   let summary = "target construct";
   let description = [{
     The target construct includes a region of code which is to be executed
@@ -1657,20 +1660,20 @@ def TargetOp : OpenMP_Op<"target", traits = [
                        bool *hostEvalTripCount = nullptr);
   }] # clausesExtraClassDeclaration;
 
-  let assemblyFormat = clausesAssemblyFormat # [{
+  let assemblyFormat = clausesAssemblyFormat#[{
     ( `map_iterated` `(` $map_iterated^ `:` type($map_iterated) `)` )?
     custom<TargetOpRegion>(
         $region, $has_device_addr_vars, type($has_device_addr_vars),
         $host_eval_vars, type($host_eval_vars), $in_reduction_vars,
         type($in_reduction_vars), $in_reduction_byref, $in_reduction_syms,
-        $map_vars, type($map_vars), $private_vars, type($private_vars),
+        $map_vars, type($map_vars), $map_iterated_capture_vars,
+        type($map_iterated_capture_vars), $private_vars, type($private_vars),
         $private_syms, $private_needs_barrier, $private_maps) attr-dict
   }];
 
   let hasVerifier = 1;
   let hasRegionVerifier = 1;
 }
-
 
 //===----------------------------------------------------------------------===//
 // 2.16 master Construct

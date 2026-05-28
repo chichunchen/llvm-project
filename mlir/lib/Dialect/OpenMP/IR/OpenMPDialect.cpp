@@ -1081,6 +1081,7 @@ struct AllRegionParseArgs {
   std::optional<MapParseArgs> hostEvalArgs;
   std::optional<ReductionParseArgs> inReductionArgs;
   std::optional<MapParseArgs> mapArgs;
+  std::optional<MapParseArgs> mapIteratedCaptureArgs;
   std::optional<PrivateParseArgs> privateArgs;
   std::optional<ReductionParseArgs> reductionArgs;
   std::optional<ReductionParseArgs> taskReductionArgs;
@@ -1269,6 +1270,12 @@ static ParseResult parseBlockArgRegion(OpAsmParser &parser, Region &region,
     return parser.emitError(parser.getCurrentLocation())
            << "invalid `map_entries` format";
 
+  if (failed(parseBlockArgClause(parser, entryBlockArgs,
+                                 "map_iterated_captures",
+                                 args.mapIteratedCaptureArgs)))
+    return parser.emitError(parser.getCurrentLocation())
+           << "invalid `map_iterated_captures` format";
+
   if (failed(parseBlockArgClause(parser, entryBlockArgs, "private",
                                  args.privateArgs)))
     return parser.emitError(parser.getCurrentLocation())
@@ -1310,6 +1317,8 @@ static ParseResult parseTargetOpRegion(
     DenseBoolArrayAttr &inReductionByref, ArrayAttr &inReductionSyms,
     SmallVectorImpl<OpAsmParser::UnresolvedOperand> &mapVars,
     SmallVectorImpl<Type> &mapTypes,
+    SmallVectorImpl<OpAsmParser::UnresolvedOperand> &mapIteratedCaptureVars,
+    SmallVectorImpl<Type> &mapIteratedCaptureTypes,
     llvm::SmallVectorImpl<OpAsmParser::UnresolvedOperand> &privateVars,
     llvm::SmallVectorImpl<Type> &privateTypes, ArrayAttr &privateSyms,
     UnitAttr &privateNeedsBarrier, DenseI64ArrayAttr &privateMaps) {
@@ -1319,6 +1328,8 @@ static ParseResult parseTargetOpRegion(
   args.inReductionArgs.emplace(inReductionVars, inReductionTypes,
                                inReductionByref, inReductionSyms);
   args.mapArgs.emplace(mapVars, mapTypes);
+  args.mapIteratedCaptureArgs.emplace(mapIteratedCaptureVars,
+                                      mapIteratedCaptureTypes);
   args.privateArgs.emplace(privateVars, privateTypes, privateSyms,
                            privateNeedsBarrier, &privateMaps);
   return parseBlockArgRegion(parser, region, args);
@@ -1447,6 +1458,7 @@ struct AllRegionPrintArgs {
   std::optional<MapPrintArgs> hostEvalArgs;
   std::optional<ReductionPrintArgs> inReductionArgs;
   std::optional<MapPrintArgs> mapArgs;
+  std::optional<MapPrintArgs> mapIteratedCaptureArgs;
   std::optional<PrivatePrintArgs> privateArgs;
   std::optional<ReductionPrintArgs> reductionArgs;
   std::optional<ReductionPrintArgs> taskReductionArgs;
@@ -1550,6 +1562,9 @@ static void printBlockArgRegion(OpAsmPrinter &p, Operation *op, Region &region,
                       args.inReductionArgs);
   printBlockArgClause(p, ctx, "map_entries", iface.getMapBlockArgs(),
                       args.mapArgs);
+  printBlockArgClause(p, ctx, "map_iterated_captures",
+                      iface.getMapIteratedCaptureBlockArgs(),
+                      args.mapIteratedCaptureArgs);
   printBlockArgClause(p, ctx, "private", iface.getPrivateBlockArgs(),
                       args.privateArgs);
   printBlockArgClause(p, ctx, "reduction", iface.getReductionBlockArgs(),
@@ -1574,7 +1589,8 @@ static void printTargetOpRegion(
     ValueRange hostEvalVars, TypeRange hostEvalTypes,
     ValueRange inReductionVars, TypeRange inReductionTypes,
     DenseBoolArrayAttr inReductionByref, ArrayAttr inReductionSyms,
-    ValueRange mapVars, TypeRange mapTypes, ValueRange privateVars,
+    ValueRange mapVars, TypeRange mapTypes, ValueRange mapIteratedCaptureVars,
+    TypeRange mapIteratedCaptureTypes, ValueRange privateVars,
     TypeRange privateTypes, ArrayAttr privateSyms, UnitAttr privateNeedsBarrier,
     DenseI64ArrayAttr privateMaps) {
   AllRegionPrintArgs args;
@@ -1583,6 +1599,8 @@ static void printTargetOpRegion(
   args.inReductionArgs.emplace(inReductionVars, inReductionTypes,
                                inReductionByref, inReductionSyms);
   args.mapArgs.emplace(mapVars, mapTypes);
+  args.mapIteratedCaptureArgs.emplace(mapIteratedCaptureVars,
+                                      mapIteratedCaptureTypes);
   args.privateArgs.emplace(privateVars, privateTypes, privateSyms,
                            privateNeedsBarrier, privateMaps);
   printBlockArgRegion(p, op, region, args);
@@ -2444,6 +2462,14 @@ static LogicalResult verifyPrivateVarsMapping(TargetOp targetOp) {
     return emitError(targetOp.getLoc(), "sizes of `private` operand range and "
                                         "`private_maps` attribute mismatch");
 
+  int64_t numMapVars = targetOp.getMapVars().size();
+  for (int64_t mapIdx : privateMapIndices.value().asArrayRef()) {
+    if (mapIdx < -1 || mapIdx >= numMapVars)
+      return emitError(targetOp.getLoc(),
+                       "`private_maps` index must refer to an ordinary "
+                       "`map_entries` operand");
+  }
+
   return success();
 }
 
@@ -2593,9 +2619,9 @@ void TargetOp::build(OpBuilder &builder, OperationState &state,
       clauses.hasDeviceAddrVars, clauses.hostEvalVars, clauses.ifExpr,
       /*in_reduction_vars=*/{}, /*in_reduction_byref=*/nullptr,
       /*in_reduction_syms=*/nullptr, clauses.isDevicePtrVars, clauses.mapVars,
-      clauses.mapIterated, clauses.nowait, clauses.privateVars,
-      makeArrayAttr(ctx, clauses.privateSyms), clauses.privateNeedsBarrier,
-      clauses.threadLimitVars,
+      clauses.mapIterated, clauses.mapIteratedCaptureVars, clauses.nowait,
+      clauses.privateVars, makeArrayAttr(ctx, clauses.privateSyms),
+      clauses.privateNeedsBarrier, clauses.threadLimitVars,
       /*private_maps=*/nullptr);
 }
 
@@ -2609,13 +2635,11 @@ LogicalResult TargetOp::verify() {
                                       getHasDeviceAddrVars())))
     return failure();
 
-  if (!getMapIterated().empty())
-    return emitOpError()
-           << "'map_iterated' is not yet supported on 'omp.target' without "
-              "target-region capture bindings";
-
   if (failed(verifyMapClause(*this, getMapVars(), getMapIterated())))
     return failure();
+
+  if (getMapIterated().empty() && !getMapIteratedCaptureVars().empty())
+    return emitOpError() << "'map_iterated_captures' requires 'map_iterated'";
 
   if (failed(verifyDynGroupprivateClause(
           *this, getDynGroupprivateAccessGroupAttr(),

@@ -3123,7 +3123,7 @@ func.func @omp_target_depend(%data_var: memref<i32>) {
   // expected-error @below {{op expected as many depend values as depend variables}}
     "omp.target"(%data_var) ({
       "omp.terminator"() : () -> ()
-    }) {depend_kinds = [], operandSegmentSizes = array<i32: 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>} : (memref<i32>) -> ()
+    }) {depend_kinds = [], operandSegmentSizes = array<i32: 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>} : (memref<i32>) -> ()
    "func.return"() : () -> ()
 }
 
@@ -3542,11 +3542,34 @@ func.func @target_undefined_privatizer(%arg0: index) {
 
 func.func @target_private_count_mismatch(%arg0: !llvm.ptr) {
   // expected-error @below {{inconsistent number of private variables and privatizer op symbols, private vars: 1 vs. privatizer op symbols: 2}}
-  "omp.target"(%arg0) <{operandSegmentSizes = array<i32: 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0>,
+  "omp.target"(%arg0) <{operandSegmentSizes = array<i32: 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0>,
                          private_syms = [@x.privatizer, @y.privatizer]}> ({
   ^bb0(%arg1 : !llvm.ptr):
     omp.terminator
   }) : (!llvm.ptr) -> ()
+  return
+}
+
+omp.private {type = private} @target.ptr.privatizer : !llvm.ptr init {
+^bb0(%arg0: !llvm.ptr, %arg1: !llvm.ptr):
+  omp.yield(%arg0 : !llvm.ptr)
+}
+
+func.func @target_private_map_to_capture_invalid(%lb : index, %ub : index,
+                                                 %st : index,
+                                                 %arg0: !llvm.ptr,
+                                                 %arg1: !llvm.ptr) {
+  %it = omp.iterator(%iv: index) = (%lb to %ub step %st) {
+    %m = omp.map.info var_ptr(%arg0 : !llvm.ptr, i32) map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
+    omp.yield(%m : !llvm.ptr)
+  } -> !omp.iterated<!llvm.ptr>
+  // expected-error @below {{`private_maps` index must refer to an ordinary `map_entries` operand}}
+  "omp.target"(%it, %arg0, %arg1) <{operandSegmentSizes = array<i32: 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0>,
+                                    private_maps = array<i64: 0>,
+                                    private_syms = [@target.ptr.privatizer]}> ({
+  ^bb0(%arg2 : !llvm.ptr, %arg3 : !llvm.ptr):
+    omp.terminator
+  }) : (!omp.iterated<!llvm.ptr>, !llvm.ptr, !llvm.ptr) -> ()
   return
 }
 
@@ -4588,16 +4611,50 @@ func.func @target_data_map_iterated_invalid_delete(%lb : index, %ub : index,
 
 // -----
 
-func.func @target_map_iterated_unsupported(%lb : index, %ub : index,
-                                           %st : index,
-                                           %addr : !llvm.ptr) {
-  %mapv = omp.map.info var_ptr(%addr : !llvm.ptr, i32) map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
+func.func @target_map_iterated_not_iterator(%it : !omp.iterated<!llvm.ptr>) {
+  // expected-error @below {{'omp.target' op 'map_iterated' arguments must be defined by 'omp.iterator' ops}}
+  omp.target map_iterated(%it : !omp.iterated<!llvm.ptr>) {
+    omp.terminator
+  }
+  return
+}
+
+// -----
+
+func.func @target_map_iterated_yield_not_map_info(%lb : index, %ub : index,
+                                                  %st : index,
+                                                  %addr : !llvm.ptr) {
+  %it = omp.iterator(%iv: index) = (%lb to %ub step %st) {
+    omp.yield(%addr : !llvm.ptr)
+  } -> !omp.iterated<!llvm.ptr>
+  // expected-error @below {{'omp.target' op 'map_iterated' iterator body must yield a value defined by 'omp.map.info'}}
+  omp.target map_iterated(%it : !omp.iterated<!llvm.ptr>) {
+    omp.terminator
+  }
+  return
+}
+
+// -----
+
+func.func @target_map_iterated_capture_count_mismatch(%lb : index, %ub : index,
+                                                      %st : index,
+                                                      %addr : !llvm.ptr) {
   %it = omp.iterator(%iv: index) = (%lb to %ub step %st) {
     %m = omp.map.info var_ptr(%addr : !llvm.ptr, i32) map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
     omp.yield(%m : !llvm.ptr)
   } -> !omp.iterated<!llvm.ptr>
-  // expected-error @below {{'map_iterated' is not yet supported on 'omp.target' without target-region capture bindings}}
-  omp.target map_iterated(%it : !omp.iterated<!llvm.ptr>) map_entries(%mapv -> %arg0 : !llvm.ptr) {
+  // expected-error @below {{'omp.target' op expected at least 1 entry block argument(s)}}
+  "omp.target"(%it, %addr) <{operandSegmentSizes = array<i32: 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0>}> ({
+    omp.terminator
+  }) : (!omp.iterated<!llvm.ptr>, !llvm.ptr) -> ()
+  return
+}
+
+// -----
+
+func.func @target_map_iterated_capture_without_iterator(%addr : !llvm.ptr) {
+  // expected-error @below {{'omp.target' op 'map_iterated_captures' requires 'map_iterated'}}
+  omp.target map_iterated_captures(%addr -> %arg0 : !llvm.ptr) {
     omp.terminator
   }
   return
