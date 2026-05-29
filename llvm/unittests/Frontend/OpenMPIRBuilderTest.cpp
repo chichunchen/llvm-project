@@ -6399,6 +6399,8 @@ void CreateDefaultMapInfos(llvm::OpenMPIRBuilder &OmpBuilder,
   for (auto Arg : Args) {
     CombinedInfo.BasePointers.emplace_back(Arg);
     CombinedInfo.Pointers.emplace_back(Arg);
+    CombinedInfo.DevicePointers.emplace_back(
+        llvm::OpenMPIRBuilder::DeviceInfoTy::None);
     uint32_t SrcLocStrSize;
     CombinedInfo.Names.emplace_back(OmpBuilder.getOrCreateSrcLocStr(
         "Unknown loc - stub implementation", SrcLocStrSize));
@@ -6594,6 +6596,129 @@ TEST_F(OpenMPIRBuilderTest, TargetRegion) {
             F->getFnAttribute("target-features"));
 
   EXPECT_FALSE(verifyModule(*M, &errs()));
+}
+
+TEST_F(OpenMPIRBuilderTest, TargetRegionDynamicMapEntries) {
+  using InsertPointTy = OpenMPIRBuilder::InsertPointTy;
+  OpenMPIRBuilder OMPBuilder(*M);
+  OMPBuilder.initialize();
+  OpenMPIRBuilderConfig Config(false, false, false, false, false, false, false);
+  OMPBuilder.setConfig(Config);
+  F->setName("func");
+  IRBuilder<> Builder(BB);
+  auto *Int32Ty = Builder.getInt32Ty();
+  auto *Int64Ty = Builder.getInt64Ty();
+
+  AllocaInst *APtr = Builder.CreateAlloca(Int32Ty, nullptr, "a_ptr");
+  AllocaInst *MapCountPtr =
+      Builder.CreateAlloca(Int64Ty, nullptr, "map_count.addr");
+  Builder.CreateStore(Builder.getInt64(2), MapCountPtr);
+  Value *MapCount = Builder.CreateLoad(Int64Ty, MapCountPtr, "map.count");
+
+  auto BodyGenCB = [&](InsertPointTy, InsertPointTy CodeGenIP,
+                       ArrayRef<BasicBlock *>) -> InsertPointTy {
+    Builder.restoreIP(CodeGenIP);
+    return Builder.saveIP();
+  };
+
+  SmallVector<Value *> Inputs;
+  Inputs.push_back(APtr);
+
+  auto SimpleArgAccessorCB = [&](Argument &Arg, Value *, Value *&RetVal,
+                                 InsertPointTy, InsertPointTy CodeGenIP,
+                                 ArrayRef<InsertPointTy>) {
+    RetVal = cast<Value>(&Arg);
+    return CodeGenIP;
+  };
+
+  OpenMPIRBuilder::MapInfosTy CombinedInfos;
+  OpenMPIRBuilder::TargetDataInfo Info(
+      /*RequiresDevicePointerInfo=*/false,
+      /*SeparateBeginEndCalls=*/true);
+  auto GenMapInfoCB = [&](InsertPointTy) -> OpenMPIRBuilder::MapInfosTy & {
+    CreateDefaultMapInfos(OMPBuilder, Inputs, CombinedInfos);
+    Info.TotalMapCount = MapCount;
+    return CombinedInfos;
+  };
+
+  bool DynMapEntriesCBInvoked = false;
+  auto DynMapEntriesCB = [&](InsertPointTy CodeGenIP,
+                             OpenMPIRBuilder::TargetDataRTArgs &RTArgs,
+                             unsigned StaticCount) -> Error {
+    EXPECT_EQ(StaticCount, 1U);
+    DynMapEntriesCBInvoked = true;
+    Builder.restoreIP(CodeGenIP);
+    OMPBuilder.emitOffloadingArraysMapEntry(
+        Builder, RTArgs, Info, Builder.getInt64(StaticCount), APtr, APtr,
+        Builder.getInt64(0),
+        Builder.getInt64(llvm::to_underlying(
+            omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM)));
+    return Error::success();
+  };
+
+  auto CustomMapperCB = [&](unsigned) {
+    return static_cast<Function *>(nullptr);
+  };
+
+  TargetRegionEntryInfo EntryInfo("func", 42, 4711, 17);
+  OpenMPIRBuilder::LocationDescription OmpLoc({Builder.saveIP(), DL});
+  OpenMPIRBuilder::TargetKernelRuntimeAttrs RuntimeAttrs;
+  OpenMPIRBuilder::TargetKernelDefaultAttrs DefaultAttrs = {
+      /*ExecFlags=*/omp::OMPTgtExecModeFlags::OMP_TGT_EXEC_MODE_GENERIC,
+      /*MaxTeams=*/{10}, /*MinTeams=*/0, /*MaxThreads=*/{0}, /*MinThreads=*/0};
+  RuntimeAttrs.TargetThreadLimit[0] = Builder.getInt32(20);
+  RuntimeAttrs.TeamsThreadLimit[0] = Builder.getInt32(30);
+  RuntimeAttrs.MaxThreads = Builder.getInt32(40);
+  RuntimeAttrs.DeviceID = Builder.getInt64(llvm::omp::OMP_DEVICEID_UNDEF);
+
+  ASSERT_EXPECTED_INIT(
+      InsertPointTy, AfterIP,
+      OMPBuilder.createTarget(
+          OmpLoc, /*IsOffloadEntry=*/true, Builder.saveIP(), Builder.saveIP(),
+          {}, Info, EntryInfo, DefaultAttrs, RuntimeAttrs,
+          /*IfCond=*/nullptr, Inputs, GenMapInfoCB, BodyGenCB,
+          SimpleArgAccessorCB, CustomMapperCB, {}, /*HasNowait=*/false,
+          /*DynCGroupMem=*/nullptr, omp::OMPDynGroupprivateFallbackType::Abort,
+          DynMapEntriesCB));
+  Builder.restoreIP(AfterIP);
+
+  OMPBuilder.finalize();
+  Builder.CreateRetVoid();
+
+  EXPECT_TRUE(DynMapEntriesCBInvoked);
+
+  CallInst *TargetKernelCall = nullptr;
+  for (Instruction &I : instructions(F)) {
+    auto *Call = dyn_cast<CallInst>(&I);
+    if (!Call || !Call->getCalledFunction())
+      continue;
+    if (Call->getCalledFunction()->getName().starts_with(
+            "__tgt_target_kernel")) {
+      TargetKernelCall = Call;
+      break;
+    }
+  }
+  ASSERT_NE(TargetKernelCall, nullptr);
+
+  Value *KernelArgs =
+      TargetKernelCall->getArgOperand(TargetKernelCall->arg_size() - 1);
+  StoreInst *NumArgsStore = nullptr;
+  for (User *U : KernelArgs->users()) {
+    auto *GEP = dyn_cast<GetElementPtrInst>(U);
+    if (!GEP || GEP->getNumIndices() != 2)
+      continue;
+    auto IndexIt = GEP->idx_begin();
+    auto *StructIndex = dyn_cast<ConstantInt>((++IndexIt)->get());
+    if (!StructIndex || StructIndex->getZExtValue() != 1)
+      continue;
+    NumArgsStore = dyn_cast<StoreInst>(GEP->getUniqueUndroppableUser());
+    break;
+  }
+  ASSERT_NE(NumArgsStore, nullptr);
+  auto *NumArgs = dyn_cast<CastInst>(NumArgsStore->getValueOperand());
+  ASSERT_NE(NumArgs, nullptr);
+  EXPECT_EQ(NumArgs->getOpcode(), Instruction::Trunc);
+  EXPECT_EQ(NumArgs->getOperand(0), MapCount);
 }
 
 TEST_F(OpenMPIRBuilderTest, TargetRegionDevice) {

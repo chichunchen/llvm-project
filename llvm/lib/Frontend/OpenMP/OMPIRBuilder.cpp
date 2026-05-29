@@ -637,7 +637,11 @@ void OpenMPIRBuilder::getKernelArgsVector(TargetKernelArgs &KernelArgs,
                                           IRBuilderBase &Builder,
                                           SmallVector<Value *> &ArgsVector) {
   Value *Version = Builder.getInt32(OMP_KERNEL_ARG_VERSION);
-  Value *PointerNum = Builder.getInt32(KernelArgs.NumTargetItems);
+  Value *PointerNum =
+      KernelArgs.NumTargetItemsValue
+          ? Builder.CreateIntCast(KernelArgs.NumTargetItemsValue,
+                                  Builder.getInt32Ty(), /*isSigned=*/false)
+          : Builder.getInt32(KernelArgs.NumTargetItems);
   auto Int32Ty = Type::getInt32Ty(Builder.getContext());
   constexpr size_t MaxDim = 3;
   Value *ZeroArray = Constant::getNullValue(ArrayType::get(Int32Ty, MaxDim));
@@ -9656,7 +9660,8 @@ static void emitTargetCall(
     OpenMPIRBuilder::GenMapInfoCallbackTy GenMapInfoCB,
     OpenMPIRBuilder::CustomMapperCallbackTy CustomMapperCB,
     const OpenMPIRBuilder::DependenciesInfo &Dependencies, bool HasNoWait,
-    Value *DynCGroupMem, OMPDynGroupprivateFallbackType DynCGroupMemFallback) {
+    Value *DynCGroupMem, OMPDynGroupprivateFallbackType DynCGroupMemFallback,
+    OpenMPIRBuilder::DynMapEntriesCallbackTy DynMapEntriesCB) {
   // Generate a function call to the host fallback implementation of the target
   // region. This is called by the host when no offload entry was generated for
   // the target region and when the offloading call fails at runtime.
@@ -9741,7 +9746,8 @@ static void emitTargetCall(
     if (Error Err = OMPBuilder.emitOffloadingArraysAndArgs(
             AllocaIP, Builder.saveIP(), Info, RTArgs, MapInfo, CustomMapperCB,
             /*IsNonContiguous=*/true,
-            /*ForEndCall=*/false))
+            /*ForEndCall=*/false,
+            /*DeviceAddrCB=*/nullptr, DynMapEntriesCB))
       return Err;
 
     SmallVector<Value *, 3> NumTeamsC;
@@ -9803,7 +9809,7 @@ static void emitTargetCall(
 
     KArgs = OpenMPIRBuilder::TargetKernelArgs(
         NumTargetItems, RTArgs, TripCount, NumTeamsC, NumThreadsC, DynCGroupMem,
-        HasNoWait, DynCGroupMemFallback);
+        HasNoWait, DynCGroupMemFallback, Info.TotalMapCount);
 
     // Assume no error was returned because TaskBodyCB and
     // EmitTargetCallFallbackCB don't produce any.
@@ -9853,7 +9859,8 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTarget(
     OpenMPIRBuilder::TargetGenArgAccessorsCallbackTy ArgAccessorFuncCB,
     CustomMapperCallbackTy CustomMapperCB, const DependenciesInfo &Dependencies,
     bool HasNowait, Value *DynCGroupMem,
-    OMPDynGroupprivateFallbackType DynCGroupMemFallback) {
+    OMPDynGroupprivateFallbackType DynCGroupMemFallback,
+    DynMapEntriesCallbackTy DynMapEntriesCB) {
 
   if (!updateToLocation(Loc))
     return InsertPointTy();
@@ -9877,7 +9884,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTarget(
     emitTargetCall(*this, Builder, AllocaIP, DeallocBlocks, Info, DefaultAttrs,
                    RuntimeAttrs, IfCond, OutlinedFn, OutlinedFnID, Inputs,
                    GenMapInfoCB, CustomMapperCB, Dependencies, HasNowait,
-                   DynCGroupMem, DynCGroupMemFallback);
+                   DynCGroupMem, DynCGroupMemFallback, DynMapEntriesCB);
   return Builder.saveIP();
 }
 

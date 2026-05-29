@@ -2759,6 +2759,8 @@ public:
   struct TargetKernelArgs {
     /// Number of arguments passed to the runtime library.
     unsigned NumTargetItems = 0;
+    /// Runtime-computed number of arguments passed to the runtime library.
+    Value *NumTargetItemsValue = nullptr;
     /// Arguments passed to the runtime library
     TargetDataRTArgs RTArgs;
     /// The number of iterations
@@ -2781,8 +2783,10 @@ public:
                      Value *NumIterations, ArrayRef<Value *> NumTeams,
                      ArrayRef<Value *> NumThreads, Value *DynCGroupMem,
                      bool HasNoWait,
-                     omp::OMPDynGroupprivateFallbackType DynCGroupMemFallback)
-        : NumTargetItems(NumTargetItems), RTArgs(RTArgs),
+                     omp::OMPDynGroupprivateFallbackType DynCGroupMemFallback,
+                     Value *NumTargetItemsValue = nullptr)
+        : NumTargetItems(NumTargetItems),
+          NumTargetItemsValue(NumTargetItemsValue), RTArgs(RTArgs),
           NumIterations(NumIterations), NumTeams(NumTeams),
           NumThreads(NumThreads), DynCGroupMem(DynCGroupMem),
           HasNoWait(HasNoWait), DynCGroupMemFallback(DynCGroupMemFallback) {}
@@ -3683,8 +3687,10 @@ public:
   ///        not.
   /// \param DynCGroupMem The size of the dynamic groupprivate memory for each
   /// cgroup.
-  /// \param DynCGroupMem The fallback mechanism to execute if the requested
-  /// cgroup memory cannot be provided.
+  /// \param DynCGroupMemFallback The fallback mechanism to execute if the
+  /// requested cgroup memory cannot be provided.
+  /// \param DynMapEntriesCB Callback for filling dynamic map entries after
+  ///        static entries have been emitted into the offloading arrays.
   LLVM_ABI InsertPointOrErrorTy createTarget(
       const LocationDescription &Loc, bool IsOffloadEntry,
       OpenMPIRBuilder::InsertPointTy AllocaIP,
@@ -3700,7 +3706,8 @@ public:
       const DependenciesInfo &Dependencies = {}, bool HasNowait = false,
       Value *DynCGroupMem = nullptr,
       omp::OMPDynGroupprivateFallbackType DynCGroupMemFallback =
-          omp::OMPDynGroupprivateFallbackType::Abort);
+          omp::OMPDynGroupprivateFallbackType::Abort,
+      DynMapEntriesCallbackTy DynMapEntriesCB = nullptr);
 
   /// Returns __kmpc_for_static_init_* runtime function for the specified
   /// size \a IVSize and sign \a IVSigned. Will create a distribute call
