@@ -7944,6 +7944,7 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   llvm::DenseMap<Value, Value> mappedPrivateVars;
   DataLayout dl = DataLayout(opInst.getParentOfType<ModuleOp>());
   SmallVector<Value> mapVars = targetOp.getMapVars();
+  SmallVector<Value> mapIterated = targetOp.getMapIterated();
   SmallVector<Value> hdaVars = targetOp.getHasDeviceAddrVars();
   SmallVector<Value> mapIteratedCaptureVars =
       targetOp.getMapIteratedCaptureVars();
@@ -7959,11 +7960,35 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   // specified.
   bool isOffloadEntry =
       isTargetDevice || !ompBuilder->Config.TargetTriples.empty();
-  if (!isTargetDevice && isOffloadEntry && !targetOp.getMapIterated().empty()) {
+
+  llvm::SmallVector<IteratorInfo, 2> iterInfos;
+  if (!isTargetDevice && isOffloadEntry && targetOp.getNowait() &&
+      !mapIterated.empty()) {
     return targetOp.emitError()
-           << "not yet implemented: Unhandled clause map/motion clause with "
-              "iterator modifier in "
-           << targetOp.getOperationName() << " operation";
+           << "not yet implemented: map/motion clause with iterator modifier "
+              "on nowait target";
+  }
+
+  if (!isTargetDevice && isOffloadEntry) {
+    for (Value iter : mapIterated) {
+      auto itersOp = iter.getDefiningOp<omp::IteratorOp>();
+      assert(itersOp && "map_iterated value must be defined by omp.iterator");
+      auto yield =
+          dyn_cast<omp::YieldOp>(itersOp.getRegion().front().getTerminator());
+      assert(yield && yield.getResults().size() == 1 &&
+             "expect omp.yield in iterator region to have one result");
+      auto mapInfoOp = yield.getResults()[0].getDefiningOp<omp::MapInfoOp>();
+      assert(mapInfoOp && "expect iterator to yield omp.map.info");
+
+      if (!mapInfoOp.getMembers().empty()) {
+        mapInfoOp.emitError()
+            << "not yet implemented: map/motion clause with iterator modifier "
+               "that expands to member maps";
+        return failure();
+      }
+
+      iterInfos.emplace_back(itersOp, moduleTranslation, builder);
+    }
   }
 
   // For some private variables, the MapsForPrivatizedVariablesPass
@@ -8127,6 +8152,10 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
       mapIteratedCaptureInputs.push_back(captureInput);
   }
 
+  llvm::OpenMPIRBuilder::TargetDataInfo info(
+      /*RequiresDevicePointerInfo=*/false,
+      /*SeparateBeginEndCalls=*/true);
+
   MapInfosTy combinedInfos;
   auto genMapInfoCB =
       [&](llvm::OpenMPIRBuilder::InsertPointTy codeGenIP) -> MapInfosTy & {
@@ -8163,7 +8192,121 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
       combinedInfos.Names.push_back(nullPtr);
     combinedInfos.Mappers.push_back(nullptr);
 
+    if (!iterInfos.empty()) {
+      info.TotalMapCount = builder.getInt64(combinedInfos.BasePointers.size());
+      for (IteratorInfo &iterInfo : iterInfos)
+        info.TotalMapCount =
+            builder.CreateAdd(info.TotalMapCount, iterInfo.getTotalTrips());
+    }
+
     return combinedInfos;
+  };
+
+  auto dynMapEntriesCB = [&](InsertPointTy codeGenIP,
+                             llvm::OpenMPIRBuilder::TargetDataRTArgs &rtArgs,
+                             unsigned staticCount) -> llvm::Error {
+    builder.restoreIP(codeGenIP);
+    llvm::Value *offset = builder.getInt64(staticCount);
+    llvm::Error dynError = llvm::Error::success();
+
+    auto mapTypeValue =
+        [&](llvm::omp::OpenMPOffloadMappingFlags flags) -> llvm::Value * {
+      flags &= ~llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM;
+      return builder.getInt64(
+          static_cast<
+              std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+              flags));
+    };
+    auto endMapTypeValue =
+        [&](llvm::omp::OpenMPOffloadMappingFlags flags) -> llvm::Value * {
+      uint64_t mapping = static_cast<
+          std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(flags);
+      mapping &= ~static_cast<
+          std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_PRESENT);
+      mapping &= ~static_cast<
+          std::underlying_type_t<llvm::omp::OpenMPOffloadMappingFlags>>(
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM);
+      return builder.getInt64(mapping);
+    };
+
+    for (auto [i, iterInfo] : llvm::enumerate(iterInfos)) {
+      auto itersOp = mapIterated[i].getDefiningOp<omp::IteratorOp>();
+      if (failed(fillIteratorLoop(
+              itersOp, builder, moduleTranslation, iterInfo, "map_iterator",
+              [&](llvm::Value *linearIV, omp::YieldOp yield) {
+                if (dynError)
+                  return;
+
+                Value yieldedMap = yield.getResults()[0];
+                SmallVector<Value> iterMapVars{yieldedMap};
+                MapInfoData iterMapData;
+                collectMapDataFromMapOperands(iterMapData, iterMapVars,
+                                              moduleTranslation, dl, builder);
+
+                MapInfosTy iterCombinedInfo;
+                genMapInfos(builder, moduleTranslation, dl, iterCombinedInfo,
+                            iterMapData, targetDirective);
+
+                if (!iterCombinedInfo.NonContigInfo.Offsets.empty()) {
+                  yield.emitError()
+                      << "not yet implemented: map/motion clause with iterator "
+                         "modifier and non-contiguous map bounds";
+                  dynError = llvm::make_error<PreviouslyReportedError>();
+                  return;
+                }
+                if (iterCombinedInfo.BasePointers.size() != 1) {
+                  yield.emitError()
+                      << "not yet implemented: map/motion clause with iterator "
+                         "modifier that expands to multiple map entries";
+                  dynError = llvm::make_error<PreviouslyReportedError>();
+                  return;
+                }
+
+                llvm::Value *mapperFunc = nullptr;
+                if (iterCombinedInfo.Mappers[0]) {
+                  llvm::Function *mapperFn = nullptr;
+                  {
+                    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+                    llvm::Expected<llvm::Function *> mapper =
+                        getOrCreateUserDefinedMapperFunc(
+                            iterCombinedInfo.Mappers[0], builder,
+                            moduleTranslation, targetDirective);
+                    if (!mapper) {
+                      dynError = mapper.takeError();
+                      return;
+                    }
+                    mapperFn = *mapper;
+                  }
+                  mapperFunc =
+                      builder.CreatePointerCast(mapperFn, builder.getPtrTy());
+                }
+
+                llvm::Value *idx = builder.CreateAdd(offset, linearIV);
+                llvm::Value *mapName = iterCombinedInfo.Names.empty()
+                                           ? nullptr
+                                           : iterCombinedInfo.Names[0];
+                ompBuilder->emitOffloadingArraysMapEntry(
+                    builder, rtArgs, info, idx,
+                    iterCombinedInfo.BasePointers[0],
+                    iterCombinedInfo.Pointers[0], iterCombinedInfo.Sizes[0],
+                    mapTypeValue(iterCombinedInfo.Types[0]),
+                    endMapTypeValue(iterCombinedInfo.Types[0]), mapperFunc,
+                    mapName);
+              }))) {
+        if (dynError)
+          return dynError;
+        return llvm::make_error<PreviouslyReportedError>();
+      }
+      if (dynError)
+        return dynError;
+
+      offset = builder.CreateAdd(offset, iterInfo.getTotalTrips());
+    }
+
+    ompBuilder->updateToLocation(
+        llvm::OpenMPIRBuilder::LocationDescription(builder));
+    return llvm::Error::success();
   };
 
   auto argAccessorCB = [&](llvm::Argument &arg, llvm::Value *input,
@@ -8251,10 +8394,6 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
 
   llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
 
-  llvm::OpenMPIRBuilder::TargetDataInfo info(
-      /*RequiresDevicePointerInfo=*/false,
-      /*SeparateBeginEndCalls=*/true);
-
   auto customMapperCB =
       [&](unsigned int i) -> llvm::Expected<llvm::Function *> {
     if (!combinedInfos.Mappers[i])
@@ -8284,7 +8423,11 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
           ompLoc, isOffloadEntry, allocaIP, builder.saveIP(), deallocBlocks,
           info, entryInfo, defaultAttrs, runtimeAttrs, ifCond, kernelInput,
           genMapInfoCB, bodyCB, argAccessorCB, customMapperCB, dds,
-          targetOp.getNowait(), dynSizeVal, fallbackType);
+          targetOp.getNowait(), dynSizeVal, fallbackType,
+          iterInfos.empty()
+              ? llvm::OpenMPIRBuilder::DynMapEntriesCallbackTy(nullptr)
+              : llvm::OpenMPIRBuilder::DynMapEntriesCallbackTy(
+                    dynMapEntriesCB));
 
   if (failed(handleError(afterIP, opInst)))
     return failure();
