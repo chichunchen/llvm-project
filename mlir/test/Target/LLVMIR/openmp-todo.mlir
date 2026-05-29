@@ -567,7 +567,7 @@ module attributes {omp.target_triples = ["amdgcn-amd-amdhsa"]} {
       %m = omp.map.info var_ptr(%addr : !llvm.ptr, i32) map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
       omp.yield(%m : !llvm.ptr)
     } -> !omp.iterated<!llvm.ptr>
-    // expected-error@below {{not yet implemented: Unhandled clause map iterator target-region captures in omp.target operation}}
+    // expected-error@below {{not yet implemented: Unhandled clause map/motion clause with iterator modifier in omp.target operation}}
     // expected-error@below {{LLVM Translation failed for operation: omp.target}}
     omp.target map_iterated(%it : !omp.iterated<!llvm.ptr>) map_iterated_captures(%addr -> %arg0 : !llvm.ptr) {
       omp.terminator

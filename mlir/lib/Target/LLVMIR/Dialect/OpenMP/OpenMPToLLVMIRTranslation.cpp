@@ -389,12 +389,8 @@ static LogicalResult checkImplementationStatus(Operation &op) {
       result = todo("thread_limit with multi-dimensional values");
   };
   auto checkMap = [&todo](auto op, LogicalResult &result) {
-    if (auto targetOp = llvm::dyn_cast<omp::TargetOp>(op.getOperation())) {
-      if (!targetOp.getMapIteratedCaptureVars().empty()) {
-        result = todo("map iterator target-region captures");
-        return;
-      }
-    }
+    if (isa<omp::TargetOp>(op.getOperation()))
+      return;
     if (!op.getMapIterated().empty())
       result = todo("map/motion clause with iterator modifier");
   };
@@ -7949,8 +7945,12 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   DataLayout dl = DataLayout(opInst.getParentOfType<ModuleOp>());
   SmallVector<Value> mapVars = targetOp.getMapVars();
   SmallVector<Value> hdaVars = targetOp.getHasDeviceAddrVars();
+  SmallVector<Value> mapIteratedCaptureVars =
+      targetOp.getMapIteratedCaptureVars();
   ArrayRef<BlockArgument> mapBlockArgs = argIface.getMapBlockArgs();
   ArrayRef<BlockArgument> hdaBlockArgs = argIface.getHasDeviceAddrBlockArgs();
+  ArrayRef<BlockArgument> mapIteratedCaptureBlockArgs =
+      argIface.getMapIteratedCaptureBlockArgs();
   llvm::Function *llvmOutlinedFn = nullptr;
   TargetDirectiveEnumTy targetDirective =
       getTargetDirectiveEnumTyFromOp(&opInst);
@@ -7959,6 +7959,12 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
   // specified.
   bool isOffloadEntry =
       isTargetDevice || !ompBuilder->Config.TargetTriples.empty();
+  if (!isTargetDevice && isOffloadEntry && !targetOp.getMapIterated().empty()) {
+    return targetOp.emitError()
+           << "not yet implemented: Unhandled clause map/motion clause with "
+              "iterator modifier in "
+           << targetOp.getOperationName() << " operation";
+  }
 
   // For some private variables, the MapsForPrivatizedVariablesPass
   // creates MapInfoOp instances. Go through the private variables and
@@ -8047,6 +8053,12 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
           moduleTranslation.lookupValue(mapInfoOp.getVarPtr());
       moduleTranslation.mapValue(arg, mapOpValue);
     }
+    for (auto [arg, capture] : llvm::zip_equal(
+             mapIteratedCaptureBlockArgs, mapIteratedCaptureVars)) {
+      llvm::Value *captureValue = moduleTranslation.lookupValue(capture);
+      assert(captureValue && "missing LLVM value for map_iterated capture");
+      moduleTranslation.mapValue(arg, captureValue);
+    }
 
     // Do privatization after moduleTranslation has already recorded
     // mapped values.
@@ -8102,12 +8114,39 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
                                 builder, /*useDevPtrOperands=*/{},
                                 /*useDevAddrOperands=*/{}, hdaVars);
 
+  llvm::SmallVector<llvm::Value *, 4> mapIteratedCaptureInputs;
+  for (Value capture : mapIteratedCaptureVars) {
+    llvm::Value *captureInput = moduleTranslation.lookupValue(capture);
+    assert(captureInput && "missing LLVM value for map_iterated capture");
+
+    // Captures that already have ordinary map entries use the existing target
+    // parameter entry for that map. Capture-only values need their own target
+    // parameter metadata, but must not become source-level map entries.
+    if (!llvm::is_contained(mapData.OriginalValue, captureInput) &&
+        !llvm::is_contained(mapIteratedCaptureInputs, captureInput))
+      mapIteratedCaptureInputs.push_back(captureInput);
+  }
+
   MapInfosTy combinedInfos;
   auto genMapInfoCB =
       [&](llvm::OpenMPIRBuilder::InsertPointTy codeGenIP) -> MapInfosTy & {
     builder.restoreIP(codeGenIP);
     genMapInfos(builder, moduleTranslation, dl, combinedInfos, mapData,
                 targetDirective);
+
+    for (llvm::Value *captureInput : mapIteratedCaptureInputs) {
+      combinedInfos.BasePointers.push_back(captureInput);
+      combinedInfos.Pointers.push_back(captureInput);
+      combinedInfos.DevicePointers.push_back(
+          llvm::OpenMPIRBuilder::DeviceInfoTy::None);
+      combinedInfos.Sizes.push_back(builder.getInt64(0));
+      combinedInfos.Types.push_back(
+          llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TARGET_PARAM);
+      if (!combinedInfos.Names.empty())
+        combinedInfos.Names.push_back(LLVM::createMappingInformation(
+            targetOp.getLoc(), *moduleTranslation.getOpenMPBuilder()));
+      combinedInfos.Mappers.push_back(nullptr);
+    }
 
     // Append a null entry for the implicit dyn_ptr argument so the argument
     // count sent to the runtime already includes it.
@@ -8140,6 +8179,11 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
     // version (e.g. pass ByCopy values should be treated as such on
     // host and device, currently not always the case)
     if (!isTargetDevice) {
+      retVal = cast<llvm::Value>(&arg);
+      return codeGenIP;
+    }
+
+    if (llvm::is_contained(mapIteratedCaptureInputs, input)) {
       retVal = cast<llvm::Value>(&arg);
       return codeGenIP;
     }
@@ -8190,6 +8234,9 @@ convertOmpTarget(Operation &opInst, llvm::IRBuilderBase &builder,
     if (!mapData.IsDeclareTarget[i] && !mapData.IsAMember[i] && !isAttachMap)
       kernelInput.push_back(mapData.OriginalValue[i]);
   }
+  for (llvm::Value *captureInput : mapIteratedCaptureInputs)
+    if (!llvm::is_contained(kernelInput, captureInput))
+      kernelInput.push_back(captureInput);
 
   llvm::SmallVector<llvm::BasicBlock *> deallocBlocks;
   llvm::OpenMPIRBuilder::InsertPointTy allocaIP =
