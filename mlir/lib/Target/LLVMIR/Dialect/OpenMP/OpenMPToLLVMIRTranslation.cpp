@@ -9049,8 +9049,8 @@ LogicalResult OpenMPDialectLLVMIRTranslationInterface::convertOperation(
   llvm::OpenMPIRBuilder *ompBuilder = moduleTranslation.getOpenMPBuilder();
 
   if (ompBuilder->Config.isTargetDevice() &&
-      !isa<omp::TargetOp, omp::MapInfoOp, omp::TerminatorOp, omp::YieldOp>(
-          op) &&
+      !isa<omp::TargetOp, omp::IteratorOp, omp::MapBoundsOp, omp::MapInfoOp,
+           omp::TerminatorOp, omp::YieldOp>(op) &&
       isHostDeviceOp(op))
     return op->emitOpError() << "unsupported host op found in device";
 

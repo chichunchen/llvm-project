@@ -103,6 +103,36 @@ static void collectRewrite(Value value, llvm::SetVector<Value> &rewrites) {
   rewrites.insert(value);
 }
 
+static bool isDefinedWithin(Operation *scope, Value value) {
+  if (Operation *defOp = value.getDefiningOp())
+    return scope->isAncestor(defOp);
+
+  BlockArgument blockArg = cast<BlockArgument>(value);
+  return scope->isAncestor(blockArg.getOwner()->getParentOp());
+}
+
+static void
+collectRewriteOrDeclare(Value value, llvm::SetVector<Value> &rewriteValues,
+                        llvm::SetVector<hlfir::DeclareOp> &declares) {
+  if (auto declareOp = value.getDefiningOp<hlfir::DeclareOp>()) {
+    declares.insert(declareOp);
+    return;
+  }
+
+  collectRewrite(value, rewriteValues);
+}
+
+static void
+collectExternalRewriteValues(Operation *scope,
+                             llvm::SetVector<Value> &rewriteValues,
+                             llvm::SetVector<hlfir::DeclareOp> &declares) {
+  scope->walk([&](Operation *op) {
+    for (Value operand : op->getOperands())
+      if (!isDefinedWithin(scope, operand))
+        collectRewriteOrDeclare(operand, rewriteValues, declares);
+  });
+}
+
 namespace {
 class FunctionFilteringPass
     : public flangomp::impl::FunctionFilteringPassBase<FunctionFilteringPass> {
@@ -302,6 +332,8 @@ private:
     // This logic must be updated whenever operands to omp.target change.
     llvm::SetVector<Value> rewriteValues;
     llvm::SetVector<omp::MapInfoOp> mapInfos;
+    llvm::SetVector<omp::IteratorOp> iterators;
+    llvm::SetVector<hlfir::DeclareOp> declareOps;
     for (omp::TargetOp targetOp : targetOps) {
       assert(targetOp.getHostEvalVars().empty() &&
              "unexpected host_eval in target device module");
@@ -330,6 +362,13 @@ private:
         collectRewrite(cast<omp::MapInfoOp>(mapVar.getDefiningOp()), mapInfos);
       for (Value mapVar : targetOp.getMapVars())
         collectRewrite(cast<omp::MapInfoOp>(mapVar.getDefiningOp()), mapInfos);
+      for (Value iterVal : targetOp.getMapIterated()) {
+        auto iterOp = cast<omp::IteratorOp>(iterVal.getDefiningOp());
+        iterators.insert(iterOp);
+        collectExternalRewriteValues(iterOp, rewriteValues, declareOps);
+      }
+      for (Value capture : targetOp.getMapIteratedCaptureVars())
+        collectRewriteOrDeclare(capture, rewriteValues, declareOps);
       for (Value privateVar : targetOp.getPrivateVars())
         collectRewrite(privateVar, rewriteValues);
       for (Value threadLimit : targetOp.getThreadLimitVars())
@@ -337,7 +376,6 @@ private:
     }
 
     // Move omp.map.info ops to the new block and collect dependencies.
-    llvm::SetVector<hlfir::DeclareOp> declareOps;
     llvm::SetVector<fir::BoxOffsetOp> boxOffsets;
     for (omp::MapInfoOp mapOp : mapInfos) {
       if (auto declareOp = dyn_cast_if_present<hlfir::DeclareOp>(
@@ -474,6 +512,9 @@ private:
     marker->erase();
 
     // Move target operations to the end of the new block.
+    for (omp::IteratorOp iterOp : iterators)
+      iterOp->moveBefore(&block, block.end());
+
     for (omp::TargetOp targetOp : targetOps)
       targetOp->moveBefore(&block, block.end());
 

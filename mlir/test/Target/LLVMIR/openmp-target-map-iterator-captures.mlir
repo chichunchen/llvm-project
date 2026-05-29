@@ -1,6 +1,7 @@
 // RUN: split-file %s %t
 // RUN: mlir-translate -mlir-to-llvmir %t/host-only.mlir | FileCheck %s --check-prefix=HOST
 // RUN: mlir-translate -mlir-to-llvmir %t/host-offload.mlir | FileCheck %s --check-prefix=OFFLOAD
+// RUN: mlir-translate -mlir-to-llvmir %t/device.mlir | FileCheck %s --check-prefix=DEVICE
 
 //--- host-only.mlir
 
@@ -211,3 +212,29 @@ module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-a
 // OFFLOAD: store i32 42, ptr %[[CAPTURE_ARG]]
 // OFFLOAD: define internal void @{{.*target_map_iterator_mapped_capture.*}}(ptr %[[MAPPED_ARG:.*]], ptr %{{.*}})
 // OFFLOAD: store i32 7, ptr %[[MAPPED_ARG]]
+
+//--- device.mlir
+
+module attributes {llvm.target_triple = "amdgcn-amd-amdhsa", omp.is_target_device = true} {
+  llvm.func @device_target_map_iterator(%addr : !llvm.ptr) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c2 = llvm.mlir.constant(2 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+    %it = omp.iterator(%iv: i64) = (%c0 to %c2 step %c1) {
+      %elem = llvm.getelementptr %addr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, i32)
+        map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+    omp.target map_iterated(%it : !omp.iterated<!llvm.ptr>)
+        map_iterated_captures(%addr -> %arg0 : !llvm.ptr) {
+      %c13 = llvm.mlir.constant(13 : i32) : i32
+      llvm.store %c13, %arg0 : i32, !llvm.ptr
+      omp.terminator
+    }
+    llvm.return
+  }
+}
+
+// DEVICE: define {{.*}}void @{{.*device_target_map_iterator.*}}(
+// DEVICE: store i32 13
