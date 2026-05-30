@@ -913,7 +913,11 @@ static void createBlockArgsAndMap(Location loc, RewriterBase &rewriter,
                                   SmallVector<Value> &mapOperands,
                                   SmallVector<Value> &allocs,
                                   IRMapping &irMapping) {
-  // FIRST: Map `host_eval_vars` to block arguments
+  // Use the OpenMP block-argument interface for the original target region:
+  // map_iterated_capture arguments are ordered between map and private
+  // arguments, so deriving offsets from operand counts is not reliable here.
+  auto argIface = llvm::cast<omp::BlockArgOpenMPOpInterface>(*targetOp);
+
   unsigned originalHostEvalVarsSize = targetOp.getHostEvalVars().size();
   for (unsigned i = 0; i < hostEvalVars.size(); ++i) {
     Value originalValue;
@@ -930,15 +934,14 @@ static void createBlockArgsAndMap(Location loc, RewriterBase &rewriter,
     irMapping.map(originalValue, newArg);
   }
 
-  // SECOND: Map `map_operands` to block arguments
-  unsigned originalMapVarsSize = targetOp.getMapVars().size();
+  auto originalMapBlockArgs = argIface.getMapBlockArgs();
+  unsigned originalMapVarsSize = originalMapBlockArgs.size();
   for (unsigned i = 0; i < mapOperands.size(); ++i) {
     Value originalValue;
     BlockArgument newArg;
     // Map the new arguments from the original block.
     if (i < originalMapVarsSize) {
-      originalValue = targetBlock->getArgument(originalHostEvalVarsSize +
-                                               i); // Offset by host_eval count
+      originalValue = originalMapBlockArgs[i];
       newArg = newTargetBlock->addArgument(originalValue.getType(),
                                            originalValue.getLoc());
     }
@@ -951,11 +954,13 @@ static void createBlockArgsAndMap(Location loc, RewriterBase &rewriter,
     irMapping.map(originalValue, newArg);
   }
 
-  // THIRD: Map `private_vars` to block arguments (if any)
-  unsigned originalPrivateVarsSize = targetOp.getPrivateVars().size();
-  for (unsigned i = 0; i < originalPrivateVarsSize; ++i) {
-    auto originalArg = targetBlock->getArgument(originalHostEvalVarsSize +
-                                                originalMapVarsSize + i);
+  for (BlockArgument originalArg : argIface.getMapIteratedCaptureBlockArgs()) {
+    auto newArg = newTargetBlock->addArgument(originalArg.getType(),
+                                              originalArg.getLoc());
+    irMapping.map(originalArg, newArg);
+  }
+
+  for (BlockArgument originalArg : argIface.getPrivateBlockArgs()) {
     auto newArg = newTargetBlock->addArgument(originalArg.getType(),
                                               originalArg.getLoc());
     irMapping.map(originalArg, newArg);
@@ -1264,6 +1269,7 @@ static LogicalResult moveToHost(omp::TargetOp targetOp, RewriterBase &rewriter,
   Block *targetBlock = &targetOp.getRegion().front();
   assert(targetBlock == &targetOp.getRegion().back());
   IRMapping mapping;
+  auto argIface = llvm::cast<omp::BlockArgOpenMPOpInterface>(*targetOp);
 
   // Get the parent target_data op
   auto targetDataOp = cast<omp::TargetDataOp>(targetOp->getParentOp());
@@ -1272,33 +1278,29 @@ static LogicalResult moveToHost(omp::TargetOp targetOp, RewriterBase &rewriter,
               "Expected target op to be inside target_data op");
     return failure();
   }
-  // create mapping for host_eval_vars
-  unsigned hostEvalVarCount = targetOp.getHostEvalVars().size();
-  for (unsigned i = 0; i < targetOp.getHostEvalVars().size(); ++i) {
-    Value hostEvalVar = targetOp.getHostEvalVars()[i];
-    BlockArgument arg = targetBlock->getArguments()[i];
+
+  // Map target block arguments back to the host values used for the hoisted
+  // clone. Keep this in the same clause order as the dialect interface.
+  for (auto [hostEvalVar, arg] : llvm::zip_equal(
+           targetOp.getHostEvalVars(), argIface.getHostEvalBlockArgs()))
     mapping.map(arg, hostEvalVar);
-  }
-  // create mapping for map_vars
-  for (unsigned i = 0; i < targetOp.getMapVars().size(); ++i) {
-    Value mapInfo = targetOp.getMapVars()[i];
-    BlockArgument arg = targetBlock->getArguments()[hostEvalVarCount + i];
+
+  for (auto [mapInfo, arg] :
+       llvm::zip_equal(targetOp.getMapVars(), argIface.getMapBlockArgs())) {
     Operation *op = mapInfo.getDefiningOp();
     assert(op);
     auto mapInfoOp = cast<omp::MapInfoOp>(op);
-    // map the block argument to the host-side variable pointer
     mapping.map(arg, mapInfoOp.getVarPtr());
   }
-  // create mapping for private_vars
-  unsigned mapSize = targetOp.getMapVars().size();
-  for (unsigned i = 0; i < targetOp.getPrivateVars().size(); ++i) {
-    Value privateVar = targetOp.getPrivateVars()[i];
-    // The mapping should link the device-side variable to the host-side one.
-    BlockArgument arg =
-        targetBlock->getArguments()[hostEvalVarCount + mapSize + i];
-    // Map the device-side copy (`arg`) to the host-side value (`privateVar`).
+
+  for (auto [capture, arg] :
+       llvm::zip_equal(targetOp.getMapIteratedCaptureVars(),
+                       argIface.getMapIteratedCaptureBlockArgs()))
+    mapping.map(arg, capture);
+
+  for (auto [privateVar, arg] : llvm::zip_equal(targetOp.getPrivateVars(),
+                                                argIface.getPrivateBlockArgs()))
     mapping.map(arg, privateVar);
-  }
 
   rewriter.setInsertionPoint(targetOp);
   SmallVector<Operation *> opsToReplace;
