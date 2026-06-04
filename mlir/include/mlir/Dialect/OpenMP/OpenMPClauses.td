@@ -941,8 +941,10 @@ class OpenMP_MapIteratedCaptureClauseSkip<
   let description = [{
     The optional `map_iterated_capture_vars` holds values defined outside of an
     `omp.target` region for which corresponding entry block arguments are
-    defined when runtime map entries are provided by `map_iterated`. These
-    operands do not represent map entries.
+    defined when runtime map entries are provided by `map_iterated`. Each
+    capture must be a `var_ptr` or `var_ptr_ptr` operand of an `omp.map.info`
+    yielded by one of the target's `map_iterated` iterators, or a member map of
+    such an `omp.map.info`. These operands do not represent map entries.
   }];
 
   // Assembly format not defined because this clause must be processed together

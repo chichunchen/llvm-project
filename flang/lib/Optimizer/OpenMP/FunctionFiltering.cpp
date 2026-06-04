@@ -116,7 +116,7 @@ public:
     if (!op || !op.getIsTargetDevice())
       return;
 
-    op->walk<WalkOrder::PreOrder>([&](func::FuncOp funcOp) {
+    WalkResult result = op->walk<WalkOrder::PreOrder>([&](func::FuncOp funcOp) {
       // Do not filter functions with target regions inside, because they have
       // to be available for both host and device so that regular and reverse
       // offloading can be supported.
@@ -184,6 +184,11 @@ public:
       }
       return WalkResult::advance();
     });
+
+    if (result.wasInterrupted()) {
+      signalPassFailure();
+      return;
+    }
 
     checkDeviceImplementationStatus(op);
   }
@@ -276,6 +281,13 @@ private:
       }
       return WalkResult::advance();
     });
+
+    for (omp::TargetOp targetOp : targetOps) {
+      if (!targetOp.getMapIterated().empty())
+        return targetOp.emitOpError()
+               << "not yet implemented: Unhandled clause map_iterated in "
+                  "omp.target operation during function filtering";
+    }
 
     // Make a temporary clone of the parent operation with an empty region,
     // and update all references to entry block arguments to those of the new

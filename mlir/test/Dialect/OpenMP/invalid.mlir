@@ -4662,6 +4662,24 @@ func.func @target_map_iterated_capture_without_iterator(%addr : !llvm.ptr) {
 
 // -----
 
+func.func @target_map_iterated_unrelated_capture(%lb : index, %ub : index,
+                                                 %st : index,
+                                                 %mapped : !llvm.ptr,
+                                                 %unrelated : !llvm.ptr) {
+  %it = omp.iterator(%iv: index) = (%lb to %ub step %st) {
+    %m = omp.map.info var_ptr(%mapped : !llvm.ptr, i32) map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
+    omp.yield(%m : !llvm.ptr)
+  } -> !omp.iterated<!llvm.ptr>
+  // expected-error @below {{'omp.target' op 'map_iterated_captures' argument must be used by a yielded 'omp.map.info' 'var_ptr' or 'var_ptr_ptr'}}
+  omp.target map_iterated(%it : !omp.iterated<!llvm.ptr>) map_iterated_captures(%unrelated -> %arg0 : !llvm.ptr) {
+    %0 = llvm.load %arg0 : !llvm.ptr -> i32
+    omp.terminator
+  }
+  return
+}
+
+// -----
+
 omp.declare_mapper @declare_mapper_iterated_not_iterator : !llvm.struct<"mapper_type", (i32)> {
 ^bb0(%arg: !llvm.ptr, %it: !omp.iterated<!llvm.ptr>):
   // expected-error @below {{'omp.declare_mapper.info' op 'map_iterated' arguments must be defined by 'omp.iterator' ops}}

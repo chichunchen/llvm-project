@@ -25,7 +25,7 @@ func.func @target_map_iterated_capture_workdistribute(%lb : index, %ub : index,
   %addr_map = omp.map.info var_ptr(%addr : !fir.ref<index>, index) map_clauses(tofrom) capture(ByRef) -> !fir.ref<index> {name = "addr"}
 
   %it = omp.iterator(%iv: index) = (%lb to %ub step %step) {
-    %map = omp.map.info var_ptr(%addr : !fir.ref<index>, index) map_clauses(tofrom) capture(ByRef) -> !fir.ref<index> {name = "iter_addr"}
+    %map = omp.map.info var_ptr(%capture : !fir.ref<index>, index) map_clauses(tofrom) capture(ByRef) -> !fir.ref<index> {name = "iter_capture"}
     omp.yield(%map : !fir.ref<index>)
   } -> !omp.iterated<!fir.ref<index>>
 

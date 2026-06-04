@@ -29,6 +29,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLForwardCompat.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -2444,6 +2445,55 @@ static LogicalResult verifyMapClause(Operation *op, OperandRange mapVars,
   return success();
 }
 
+static void collectMapInfoPointerOperands(MapInfoOp mapInfoOp,
+                                          llvm::SetVector<Value> &values) {
+  values.insert(mapInfoOp.getVarPtr());
+
+  if (Value varPtrPtr = mapInfoOp.getVarPtrPtr())
+    values.insert(varPtrPtr);
+
+  for (Value member : mapInfoOp.getMembers())
+    if (auto memberMapInfo = member.getDefiningOp<MapInfoOp>())
+      collectMapInfoPointerOperands(memberMapInfo, values);
+}
+
+static LogicalResult verifyMapIteratedCaptureVars(TargetOp targetOp) {
+  if (targetOp.getMapIterated().empty()) {
+    if (!targetOp.getMapIteratedCaptureVars().empty())
+      return targetOp.emitOpError()
+             << "'map_iterated_captures' requires 'map_iterated'";
+
+    return success();
+  }
+
+  llvm::SetVector<Value> iteratedMapInfoPointerOperands;
+  for (Value iter : targetOp.getMapIterated()) {
+    auto iterOp = iter.getDefiningOp<IteratorOp>();
+    if (!iterOp)
+      continue;
+
+    auto yieldOp =
+        dyn_cast<YieldOp>(iterOp.getRegion().front().getTerminator());
+    if (!yieldOp || yieldOp.getResults().size() != 1)
+      continue;
+
+    auto mapInfoOp = yieldOp.getResults()[0].getDefiningOp<MapInfoOp>();
+    if (!mapInfoOp)
+      continue;
+
+    collectMapInfoPointerOperands(mapInfoOp, iteratedMapInfoPointerOperands);
+  }
+
+  for (Value capture : targetOp.getMapIteratedCaptureVars()) {
+    if (!iteratedMapInfoPointerOperands.contains(capture))
+      return targetOp.emitOpError()
+             << "'map_iterated_captures' argument must be used by a yielded "
+                "'omp.map.info' 'var_ptr' or 'var_ptr_ptr'";
+  }
+
+  return success();
+}
+
 template <typename OpType>
 static LogicalResult verifyPrivateVarList(OpType &op);
 
@@ -2638,8 +2688,8 @@ LogicalResult TargetOp::verify() {
   if (failed(verifyMapClause(*this, getMapVars(), getMapIterated())))
     return failure();
 
-  if (getMapIterated().empty() && !getMapIteratedCaptureVars().empty())
-    return emitOpError() << "'map_iterated_captures' requires 'map_iterated'";
+  if (failed(verifyMapIteratedCaptureVars(*this)))
+    return failure();
 
   if (failed(verifyDynGroupprivateClause(
           *this, getDynGroupprivateAccessGroupAttr(),
