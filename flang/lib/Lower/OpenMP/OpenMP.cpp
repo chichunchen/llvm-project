@@ -1878,7 +1878,8 @@ genTargetClauses(lower::AbstractConverter &converter,
                  DefaultMapsTy &defaultMaps,
                  llvm::SmallVectorImpl<Object> &hasDeviceAddrObjects,
                  llvm::SmallVectorImpl<Object> &isDevicePtrObjects,
-                 llvm::SmallVectorImpl<Object> &mapObjects) {
+                 llvm::SmallVectorImpl<Object> &mapObjects,
+                 llvm::SmallVectorImpl<Object> &mapIteratedObjects) {
   ClauseProcessor cp(converter, semaCtx, clauses);
   cp.processBare(clauseOps);
   cp.processDefaultMap(stmtCtx, defaultMaps);
@@ -1893,8 +1894,8 @@ genTargetClauses(lower::AbstractConverter &converter,
   }
   cp.processIf(llvm::omp::Directive::OMPD_target, clauseOps);
   cp.processIsDevicePtr(stmtCtx, clauseOps, isDevicePtrObjects);
-  cp.processMap(loc, stmtCtx, clauseOps, llvm::omp::Directive::OMPD_unknown,
-                &mapObjects);
+  cp.processMap(loc, stmtCtx, clauseOps, llvm::omp::Directive::OMPD_target,
+                &mapObjects, &mapIteratedObjects);
   cp.processNowait(clauseOps);
   cp.processThreadLimit(stmtCtx, clauseOps);
   cp.processTODO<clause::Allocate, clause::InReduction, clause::UsesAllocators>(
@@ -1915,7 +1916,8 @@ static void genTargetDataClauses(
   ClauseProcessor cp(converter, semaCtx, clauses);
   cp.processDevice(stmtCtx, clauseOps);
   cp.processIf(llvm::omp::Directive::OMPD_target_data, clauseOps);
-  cp.processMap(loc, stmtCtx, clauseOps);
+  cp.processMap(loc, stmtCtx, clauseOps,
+                llvm::omp::Directive::OMPD_target_data);
   cp.processUseDeviceAddr(stmtCtx, clauseOps, useDeviceAddrObjects);
   cp.processUseDevicePtr(stmtCtx, clauseOps, useDevicePtrObjects);
 
@@ -2939,11 +2941,11 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
 
   mlir::omp::TargetOperands clauseOps;
   DefaultMapsTy defaultMaps;
-  llvm::SmallVector<Object> mapObjects, hasDeviceAddrObjects,
-      isDevicePtrObjects;
+  llvm::SmallVector<Object> mapObjects, mapIteratedObjects,
+      hasDeviceAddrObjects, isDevicePtrObjects;
   genTargetClauses(converter, semaCtx, symTable, stmtCtx, eval, item->clauses,
                    loc, clauseOps, defaultMaps, hasDeviceAddrObjects,
-                   isDevicePtrObjects, mapObjects);
+                   isDevicePtrObjects, mapObjects, mapIteratedObjects);
 
   if (!isDevicePtrObjects.empty()) {
     // is_device_ptr maps get duplicated so the clause and synthesized
@@ -2992,6 +2994,10 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
   collectSymbolsWithDynamicSubstring(semaCtx, eval,
                                      symbolsWithDynamicSubstring);
 
+  llvm::SmallVector<Object> mappedObjectsForImplicitCapture(mapObjects.begin(),
+                                                            mapObjects.end());
+  llvm::SetVector<const semantics::Symbol *> emptySyms;
+
   // 5.8.1 Implicit Data-Mapping Attribute Rules
   // The following code follows the implicit data-mapping rules to map all the
   // symbols used inside the region that do not have explicit data-environment
@@ -3030,9 +3036,9 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
         !symbolsWithDynamicSubstring.contains(&sym.GetUltimate()))
       return;
 
-    if (!isDuplicateMappedSymbol(sym, dsp.getAllSymbolsToPrivatize(),
-                                 hasDeviceAddrObjects, mapObjects,
-                                 isDevicePtrObjects)) {
+    if (!isDuplicateMappedSymbol(
+            sym, dsp.getAllSymbolsToPrivatize(), hasDeviceAddrObjects,
+            mappedObjectsForImplicitCapture, isDevicePtrObjects)) {
       if (const auto *details =
               sym.template detailsIf<semantics::HostAssocDetails>())
         converter.copySymbolBinding(details->symbol(), sym);
@@ -3055,9 +3061,16 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
       if (auto refType = mlir::dyn_cast<fir::ReferenceType>(baseOp.getType()))
         eleType = refType.getElementType();
 
+      bool isMappedByIterator = isDuplicateMappedSymbol(
+          sym, emptySyms, /*hasDevObjects=*/{}, mapIteratedObjects,
+          /*isDevicePtrObjects=*/{});
       std::pair<mlir::omp::ClauseMapFlags, mlir::omp::VariableCaptureKind>
-          mapFlagAndKind = getImplicitMapTypeAndKind(
-              firOpBuilder, converter, defaultMaps, eleType, loc, sym);
+          mapFlagAndKind =
+              isMappedByIterator
+                  ? std::make_pair(mlir::omp::ClauseMapFlags::storage,
+                                   mlir::omp::VariableCaptureKind::ByRef)
+                  : getImplicitMapTypeAndKind(firOpBuilder, converter,
+                                              defaultMaps, eleType, loc, sym);
 
       mlir::FlatSymbolRefAttr mapperId;
       auto defaultmapBehaviour = getDefaultmapIfPresent(defaultMaps, eleType);
@@ -3112,8 +3125,10 @@ genTargetOp(lower::AbstractConverter &converter, lower::SymMap &symTable,
           /*partialMap=*/false, mapperId);
 
       clauseOps.mapVars.push_back(mapOp);
-      mapObjects.push_back(
-          Object{const_cast<semantics::Symbol *>(&sym), std::nullopt});
+      Object implicitObject{const_cast<semantics::Symbol *>(&sym),
+                            std::nullopt};
+      mapObjects.push_back(implicitObject);
+      mappedObjectsForImplicitCapture.push_back(implicitObject);
     }
   };
   lower::pft::visitAllSymbols(eval, captureImplicitMap);

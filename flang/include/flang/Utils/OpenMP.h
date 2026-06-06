@@ -33,7 +33,8 @@ mlir::omp::MapInfoOp createMapInfoOp(mlir::OpBuilder &builder,
     mlir::omp::ClauseMapFlags mapType,
     mlir::omp::VariableCaptureKind mapCaptureType, mlir::Type retTy,
     bool partialMap = false,
-    mlir::FlatSymbolRefAttr mapperId = mlir::FlatSymbolRefAttr());
+    mlir::FlatSymbolRefAttr mapperId = mlir::FlatSymbolRefAttr(),
+    mlir::Type varPtrTy = mlir::Type());
 
 /// For an mlir value that does not have storage, allocate temporary storage
 /// (outside the target region), store the value in that storage, and map the

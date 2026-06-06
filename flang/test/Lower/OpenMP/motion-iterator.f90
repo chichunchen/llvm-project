@@ -3,6 +3,29 @@
 ! Tests for the iterator modifier on map and to/from motion clauses.
 
 !===============================================================================
+! target
+!===============================================================================
+
+subroutine target_map_iterator_no_implicit()
+  integer, parameter :: n = 16
+  integer :: a(n)
+  integer :: i
+
+  !$omp target map(iterator(i = 1:n), tofrom: a(i))
+    a(1) = 1
+  !$omp end target
+end subroutine
+
+! CHECK-LABEL: func.func @_QPtarget_map_iterator_no_implicit()
+! CHECK: %[[A:.*]]:2 = hlfir.declare %{{.*}}(%{{.*}}) {uniq_name = "_QFtarget_map_iterator_no_implicitEa"}
+! CHECK: %[[IT:.*]] = omp.iterator(%[[IV:.*]]: index) = ({{.*}} to {{.*}} step {{.*}}) {
+! CHECK:   %[[BOUNDS:.*]] = omp.map.bounds lower_bound(%{{.*}} : index) upper_bound(%{{.*}} : index) extent(%{{.*}} : index) stride(%{{.*}} : index) start_idx(%{{.*}} : index)
+! CHECK:   omp.map.info var_ptr(%[[A]]#0 : !fir.ref<!fir.array<16xi32>>, !fir.array<16xi32>) map_clauses(tofrom) capture(ByRef) bounds(%[[BOUNDS]]) -> !llvm.ptr {name = ""}
+! CHECK: } -> !omp.iterated<!llvm.ptr>
+! CHECK-NOT: map_clauses(implicit, tofrom){{.*}}{name = "a"}
+! CHECK: omp.target map_iterated(%[[IT]] : !omp.iterated<!llvm.ptr>)
+
+!===============================================================================
 ! target update
 !===============================================================================
 

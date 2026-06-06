@@ -159,11 +159,14 @@ public:
   // The optional parameter mapObjects is used to store the original Fortran
   // objects for the map operands. It may be used later on to create the
   // block_arguments for some of the directives that require it.
-  bool processMap(mlir::Location currentLocation,
-                  lower::StatementContext &stmtCtx,
-                  mlir::omp::MapClauseOps &result,
-                  llvm::omp::Directive directive = llvm::omp::OMPD_unknown,
-                  llvm::SmallVectorImpl<Object> *mapObjects = nullptr) const;
+  // The optional parameter mapIteratedObjects tracks map objects lowered into
+  // map_iterated operands, which do not have corresponding map operands.
+  bool
+  processMap(mlir::Location currentLocation, lower::StatementContext &stmtCtx,
+             mlir::omp::MapClauseOps &result,
+             llvm::omp::Directive directive = llvm::omp::OMPD_unknown,
+             llvm::SmallVectorImpl<Object> *mapObjects = nullptr,
+             llvm::SmallVectorImpl<Object> *mapIteratedObjects = nullptr) const;
   bool processMotionClauses(lower::StatementContext &stmtCtx,
                             mlir::omp::MapClauseOps &result);
   bool processNontemporal(mlir::omp::NontemporalClauseOps &result) const;
@@ -219,6 +222,19 @@ private:
       std::map<Object, OmpMapParentAndMemberData> &parentMemberIndices,
       llvm::SmallVectorImpl<mlir::Value> &mapVars,
       llvm::SmallVectorImpl<Object> &mapObjects,
+      llvm::StringRef mapperIdNameRef = "", bool isMotionModifier = false,
+      llvm::omp::Directive directive = llvm::omp::OMPD_unknown) const;
+
+  void processMapObjectsWithIterator(
+      lower::StatementContext &stmtCtx, mlir::Location clauseLocation,
+      const omp::ObjectList &objects,
+      llvm::ArrayRef<IteratorRange> iteratorRanges,
+      const llvm::SmallPtrSetImpl<const semantics::Symbol *> *ivSyms,
+      mlir::omp::ClauseMapFlags mapTypeBits,
+      std::map<Object, OmpMapParentAndMemberData> &parentMemberIndices,
+      mlir::omp::MapClauseOps &result,
+      llvm::SmallVectorImpl<Object> &mapObjects,
+      llvm::SmallVectorImpl<Object> *mapIteratedObjects,
       llvm::StringRef mapperIdNameRef = "", bool isMotionModifier = false,
       llvm::omp::Directive directive = llvm::omp::OMPD_unknown) const;
 
