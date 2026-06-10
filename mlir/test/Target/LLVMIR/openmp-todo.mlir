@@ -234,6 +234,26 @@ llvm.func @target_update_depend(%x: !llvm.ptr) {
 
 // -----
 
+// An iterator-modified depend clause on a motion op must also hit the depend
+// TODO (it must be rejected, not silently dropped).
+llvm.func @target_enter_data_iterated_depend(%x: !llvm.ptr) {
+  %c0 = llvm.mlir.constant(0 : i64) : i64
+  %c10 = llvm.mlir.constant(10 : i64) : i64
+  %c1 = llvm.mlir.constant(1 : i64) : i64
+  %it = omp.iterator(%iv: i64) = (%c0 to %c10 step %c1) {
+    %e = llvm.getelementptr %x[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+    omp.yield(%e : !llvm.ptr)
+  } -> !omp.iterated<!llvm.ptr>
+  // expected-error@below {{not yet implemented: Unhandled clause depend in omp.target_enter_data operation}}
+  // expected-error@below {{LLVM Translation failed for operation: omp.target_enter_data}}
+  omp.target_enter_data depend(taskdependin -> %it : !omp.iterated<!llvm.ptr>) {
+    omp.terminator
+  }
+  llvm.return
+}
+
+// -----
+
 llvm.func @task_allocate(%x : !llvm.ptr) {
   // expected-error@below {{not yet implemented: Unhandled clause allocate in omp.task operation}}
   // expected-error@below {{LLVM Translation failed for operation: omp.task}}

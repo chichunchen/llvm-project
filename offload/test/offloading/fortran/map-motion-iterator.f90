@@ -8,6 +8,7 @@ program map_motion_iterator
   implicit none
   integer, parameter :: n = 8
   integer :: a(n), b(n), c(n), d(n), e(n), f(n), g(n), h(n)
+  integer :: r(n), t(n), u(n), v(n)
   integer :: i, dyn_n, dyn_step
   logical :: use_device
 
@@ -182,6 +183,68 @@ program map_motion_iterator
 
   ! CHECK: exit data nowait: 501 2 503 4 505 6 507 8
   print *, "exit data nowait:", h
+
+  ! Stress: a whole-array static map and an iterator-expanded element map in the
+  ! same target enter data, updated back with a static and an iterator motion.
+  do i = 1, n
+    r(i) = i
+    t(i) = i
+  end do
+  !$omp target enter data map(to: r) map(iterator(i = 1:n:2), to: t(i))
+  !$omp target map(present, alloc: r) map(present, alloc: t(1)) &
+  !$omp&       map(present, alloc: t(3)) map(present, alloc: t(5)) &
+  !$omp&       map(present, alloc: t(7))
+    do i = 1, n
+      r(i) = 800 + i
+    end do
+    t(1) = 91
+    t(3) = 93
+    t(5) = 95
+    t(7) = 97
+  !$omp end target
+  do i = 1, n
+    r(i) = -100
+  end do
+  do i = 1, n, 2
+    t(i) = -100
+  end do
+  !$omp target update from(r) from(iterator(i = 1:n:2): t(i))
+  !$omp target exit data map(delete: r) map(delete: t)
+
+  ! CHECK: mixed static+iter r: 801 802 803 804 805 806 807 808
+  print *, "mixed static+iter r:", r
+  ! CHECK: mixed static+iter t: 91 2 93 4 95 6 97 8
+  print *, "mixed static+iter t:", t
+
+  ! Stress: two motion iterators with disjoint ranges in one update directive
+  ! (odd elements of u, even elements of v).
+  do i = 1, n
+    u(i) = i
+    v(i) = i
+  end do
+  !$omp target enter data map(to: u) map(to: v)
+  !$omp target map(present, alloc: u) map(present, alloc: v)
+    do i = 1, n, 2
+      u(i) = 600 + i
+    end do
+    do i = 2, n, 2
+      v(i) = 700 + i
+    end do
+  !$omp end target
+  do i = 1, n, 2
+    u(i) = -100
+  end do
+  do i = 2, n, 2
+    v(i) = -100
+  end do
+  !$omp target update from(iterator(i = 1:n:2): u(i)) &
+  !$omp&                from(iterator(i = 2:n:2): v(i))
+  !$omp target exit data map(delete: u) map(delete: v)
+
+  ! CHECK: multi iter u: 601 2 603 4 605 6 607 8
+  print *, "multi iter u:", u
+  ! CHECK: multi iter v: 1 702 3 704 5 706 7 708
+  print *, "multi iter v:", v
 
 end program map_motion_iterator
 

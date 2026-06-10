@@ -683,6 +683,107 @@ module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-a
         map_iterated(%it : !omp.iterated<!llvm.ptr>) nowait {}
     llvm.return
   }
+
+  // Stress: the iterator modifier composed with the other clauses each
+  // target-data/motion directive allows (if, device, use_device_ptr,
+  // use_device_addr). The iterator-expanded entries and any other clause
+  // entries share one set of dynamic offload arrays.
+
+  // target data + iterator map + use_device_ptr: the use_device_ptr entry and
+  // the iterator-expanded entries are combined into one array set.
+  llvm.func @target_data_iterator_use_device_ptr(%arr: !llvm.ptr,
+                                                  %dp: !llvm.ptr) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c4 = llvm.mlir.constant(4 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+    %it = omp.iterator(%iv: i64) = (%c0 to %c4 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, i32)
+          map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+    %dpm = omp.map.info var_ptr(%dp : !llvm.ptr, i32)
+        map_clauses(return_param) capture(ByRef) -> !llvm.ptr {name = ""}
+    omp.target_data map_iterated(%it : !omp.iterated<!llvm.ptr>)
+        use_device_ptr(%dpm -> %a0 : !llvm.ptr) {
+      omp.terminator
+    }
+    llvm.return
+  }
+
+  // target data + iterator map + use_device_addr.
+  llvm.func @target_data_iterator_use_device_addr(%arr: !llvm.ptr,
+                                                   %da: !llvm.ptr) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c4 = llvm.mlir.constant(4 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+    %it = omp.iterator(%iv: i64) = (%c0 to %c4 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, i32)
+          map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+    %dam = omp.map.info var_ptr(%da : !llvm.ptr, i32)
+        map_clauses(return_param) capture(ByRef) -> !llvm.ptr {name = ""}
+    omp.target_data map_iterated(%it : !omp.iterated<!llvm.ptr>)
+        use_device_addr(%dam -> %a0 : !llvm.ptr) {
+      omp.terminator
+    }
+    llvm.return
+  }
+
+  // target data + iterator map + if + device modifiers.
+  llvm.func @target_data_iterator_if_device(%arr: !llvm.ptr, %dev: i32,
+                                            %c: i1) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c4 = llvm.mlir.constant(4 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+    %it = omp.iterator(%iv: i64) = (%c0 to %c4 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, i32)
+          map_clauses(tofrom) capture(ByRef) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+    omp.target_data if(%c) device(%dev : i32)
+        map_iterated(%it : !omp.iterated<!llvm.ptr>) {
+      omp.terminator
+    }
+    llvm.return
+  }
+
+  // target enter data + iterator map + if + device modifiers.
+  llvm.func @target_enter_data_iterator_if_device(%arr: !llvm.ptr, %dev: i32,
+                                                  %c: i1) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c4 = llvm.mlir.constant(4 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+    %it = omp.iterator(%iv: i64) = (%c0 to %c4 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, i32)
+          map_clauses(to) capture(ByRef) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+    omp.target_enter_data if(%c) device(%dev : i32)
+        map_iterated(%it : !omp.iterated<!llvm.ptr>) {}
+    llvm.return
+  }
+
+  // target update + iterator motion + if + device modifiers.
+  llvm.func @target_update_iterator_if_device(%arr: !llvm.ptr, %dev: i32,
+                                              %c: i1) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c4 = llvm.mlir.constant(4 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+    %it = omp.iterator(%iv: i64) = (%c0 to %c4 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, i32)
+          map_clauses(to) capture(ByRef) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+    omp.target_update if(%c) device(%dev : i32)
+        map_iterated(%it : !omp.iterated<!llvm.ptr>)
+    llvm.return
+  }
 }
 
 // TARGET-LABEL: define void @omp_target_depend_iterator
@@ -886,4 +987,43 @@ module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-a
 // TARGET: call void @__tgt_target_data_begin_nowait_mapper(ptr @{{.*}}, i64 -1, i32 12, ptr %{{.*}}offload_baseptrs, ptr %{{.*}}offload_ptrs,
 // TARGET-COUNT-7: call void @__kmpc_free(i32 %{{.*}}, ptr %{{.*}}, ptr null)
 // TARGET-NOT: call void @__kmpc_free
+
+// The use_device_ptr entry (index 0) and the 5 iterator-expanded entries share
+// one offload array set (6 entries); the device pointer is read back after the
+// begin mapper. Both begin and end data mappers run for target data.
+// TARGET-LABEL: define void @target_data_iterator_use_device_ptr
+// TARGET-DAG: %[[BP:.*offload_baseptrs]] = alloca ptr, i64 6
+// TARGET: omp_map_iterator.cond:
+// TARGET: %{{.*}} = icmp ult i64 %omp_map_iterator.iv, 5
+// TARGET: call void @__tgt_target_data_begin_mapper(ptr @{{.*}}, i64 -1, i32 6, ptr %[[BP]],
+// TARGET: load ptr, ptr %{{.*}}
+// TARGET: call void @__tgt_target_data_end_mapper(ptr @{{.*}}, i64 -1, i32 6, ptr %[[BP]],
+
+// use_device_addr composes with the iterator modifier the same way.
+// TARGET-LABEL: define void @target_data_iterator_use_device_addr
+// TARGET-DAG: %[[BP2:.*offload_baseptrs]] = alloca ptr, i64 6
+// TARGET: %{{.*}} = icmp ult i64 %omp_map_iterator.iv, 5
+// TARGET: call void @__tgt_target_data_begin_mapper(ptr @{{.*}}, i64 -1, i32 6, ptr %[[BP2]],
+// TARGET: call void @__tgt_target_data_end_mapper(ptr @{{.*}}, i64 -1, i32 6, ptr %[[BP2]],
+
+// if + device modifiers compose with the iterator modifier: the device id (not
+// the -1 default) is threaded into both data mappers.
+// TARGET-LABEL: define void @target_data_iterator_if_device
+// TARGET-DAG: %[[DEV:.*]] = sext i32 %{{.*}} to i64
+// TARGET: %{{.*}} = icmp ult i64 %omp_map_iterator.iv, 5
+// TARGET: call void @__tgt_target_data_begin_mapper(ptr @{{.*}}, i64 %[[DEV]], i32 5, ptr %{{.*}}offload_baseptrs,
+// TARGET: call void @__tgt_target_data_end_mapper(ptr @{{.*}}, i64 %[[DEV]], i32 5, ptr %{{.*}}offload_baseptrs,
+
+// target enter data + iterator + if + device.
+// TARGET-LABEL: define void @target_enter_data_iterator_if_device
+// TARGET-DAG: %[[DEV2:.*]] = sext i32 %{{.*}} to i64
+// TARGET: %{{.*}} = icmp ult i64 %omp_map_iterator.iv, 5
+// TARGET: call void @__tgt_target_data_begin_mapper(ptr @{{.*}}, i64 %[[DEV2]], i32 5, ptr %{{.*}}offload_baseptrs,
+
+// target update + iterator + if + device.
+// TARGET-LABEL: define void @target_update_iterator_if_device
+// TARGET-DAG: %[[DEV3:.*]] = sext i32 %{{.*}} to i64
+// TARGET: %{{.*}} = icmp ult i64 %omp_map_iterator.iv, 5
+// TARGET: call void @__tgt_target_data_update_mapper(ptr @{{.*}}, i64 %[[DEV3]], i32 5, ptr %{{.*}}offload_baseptrs,
+
 // TARGET-LABEL: define internal void @.omp_target_task_proxy_func
