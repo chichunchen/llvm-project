@@ -647,6 +647,59 @@ module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-a
     llvm.return
   }
 
+  // A user-defined mapper attached to an iterator-modified entry is resolved
+  // per iteration and stored into the offload mappers array for the other
+  // map/motion directives too (enter data is covered above).
+  llvm.func @target_update_map_iterator_mapper(%arr: !llvm.ptr) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c2 = llvm.mlir.constant(2 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+
+    %it = omp.iterator(%iv: i64) = (%c0 to %c2 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, !llvm.struct<"SimpleMapperTy", (i32)>
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, !llvm.struct<"SimpleMapperTy", (i32)>)
+          map_clauses(from) capture(ByRef) mapper(@simple_mapper) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+
+    omp.target_update map_iterated(%it : !omp.iterated<!llvm.ptr>)
+    llvm.return
+  }
+
+  llvm.func @target_exit_data_map_iterator_mapper(%arr: !llvm.ptr) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c2 = llvm.mlir.constant(2 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+
+    %it = omp.iterator(%iv: i64) = (%c0 to %c2 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, !llvm.struct<"SimpleMapperTy", (i32)>
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, !llvm.struct<"SimpleMapperTy", (i32)>)
+          map_clauses(from) capture(ByRef) mapper(@simple_mapper) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+
+    omp.target_exit_data map_iterated(%it : !omp.iterated<!llvm.ptr>) {}
+    llvm.return
+  }
+
+  llvm.func @target_data_map_iterator_mapper(%arr: !llvm.ptr) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c2 = llvm.mlir.constant(2 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+
+    %it = omp.iterator(%iv: i64) = (%c0 to %c2 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, !llvm.struct<"SimpleMapperTy", (i32)>
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, !llvm.struct<"SimpleMapperTy", (i32)>)
+          map_clauses(tofrom) capture(ByRef) mapper(@simple_mapper) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+
+    omp.target_data map_iterated(%it : !omp.iterated<!llvm.ptr>) {
+      omp.terminator
+    }
+    llvm.return
+  }
+
   llvm.func @target_update_map_iterator_nowait(%arr: !llvm.ptr) {
     %c0 = llvm.mlir.constant(0 : i64) : i64
     %c10 = llvm.mlir.constant(10 : i64) : i64
@@ -959,6 +1012,30 @@ module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-a
 // TARGET: %[[MAPPER_SLOT:.*]] = getelementptr inbounds ptr, ptr %[[MAPPERS6]], i64 %{{.*}}
 // TARGET: store ptr @.omp_mapper.simple_mapper, ptr %[[MAPPER_SLOT]]
 // TARGET: call void @__tgt_target_data_begin_mapper(ptr @{{.*}}, i64 -1, i32 3, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %[[MAPPERS6]])
+
+// The same per-iteration mapper resolution applies to target update, target
+// exit data, and target data (only target enter data is checked above).
+// TARGET-LABEL: define void @target_update_map_iterator_mapper
+// TARGET-DAG: %[[MAPPERS_U:[^ ]*offload_mappers]] = alloca ptr, i64 3
+// TARGET: omp_map_iterator.body:
+// TARGET: %[[SLOT_U:.*]] = getelementptr inbounds ptr, ptr %[[MAPPERS_U]], i64 %{{.*}}
+// TARGET: store ptr @.omp_mapper.simple_mapper, ptr %[[SLOT_U]]
+// TARGET: call void @__tgt_target_data_update_mapper(ptr @{{.*}}, i64 -1, i32 3, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %[[MAPPERS_U]])
+
+// TARGET-LABEL: define void @target_exit_data_map_iterator_mapper
+// TARGET-DAG: %[[MAPPERS_X:[^ ]*offload_mappers]] = alloca ptr, i64 3
+// TARGET: omp_map_iterator.body:
+// TARGET: %[[SLOT_X:.*]] = getelementptr inbounds ptr, ptr %[[MAPPERS_X]], i64 %{{.*}}
+// TARGET: store ptr @.omp_mapper.simple_mapper, ptr %[[SLOT_X]]
+// TARGET: call void @__tgt_target_data_end_mapper(ptr @{{.*}}, i64 -1, i32 3, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %[[MAPPERS_X]])
+
+// TARGET-LABEL: define void @target_data_map_iterator_mapper
+// TARGET-DAG: %[[MAPPERS_D:[^ ]*offload_mappers]] = alloca ptr, i64 3
+// TARGET: omp_map_iterator.body:
+// TARGET: %[[SLOT_D:.*]] = getelementptr inbounds ptr, ptr %[[MAPPERS_D]], i64 %{{.*}}
+// TARGET: store ptr @.omp_mapper.simple_mapper, ptr %[[SLOT_D]]
+// TARGET: call void @__tgt_target_data_begin_mapper(ptr @{{.*}}, i64 -1, i32 3, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %[[MAPPERS_D]])
+// TARGET: call void @__tgt_target_data_end_mapper(ptr @{{.*}}, i64 -1, i32 3, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %[[MAPPERS_D]])
 
 // A 'nowait' target_update with an iterator modifier must keep its offloading
 // arrays alive across the deferred task. The arrays are heap-allocated with
