@@ -2824,6 +2824,9 @@ public:
     /// Whether the `target ... data` directive has a `nowait` clause.
     bool HasNoWait = false;
 
+    /// Total number of map entries when the number is computed at runtime.
+    Value *TotalMapCount = nullptr;
+
     explicit TargetDataInfo() = default;
     explicit TargetDataInfo(bool RequiresDevicePointerInfo,
                             bool SeparateBeginEndCalls)
@@ -2839,7 +2842,8 @@ public:
     bool isValid() {
       return RTArgs.BasePointersArray && RTArgs.PointersArray &&
              RTArgs.SizesArray && RTArgs.MapTypesArray &&
-             (!HasMapper || RTArgs.MappersArray) && NumberOfPtrs;
+             (!HasMapper || RTArgs.MappersArray) &&
+             (NumberOfPtrs || TotalMapCount);
     }
     bool requiresDevicePointerInfo() { return RequiresDevicePointerInfo; }
     bool separateBeginEndCalls() { return SeparateBeginEndCalls; }
@@ -2906,6 +2910,68 @@ public:
   using CustomMapperCallbackTy =
       function_ref<Expected<Function *>(unsigned int)>;
 
+  /// Callback for filling dynamic map entries after static entries have been
+  /// emitted into the offloading arrays.
+  using DynMapEntriesCallbackTy =
+      function_ref<Error(InsertPointTy CodeGenIP, TargetDataRTArgs &RTArgs,
+                         unsigned int StaticCount)>;
+
+  /// Store a single map entry into the offloading arrays at \p Index.
+  ///
+  /// The element addressing depends on whether \p Info.TotalMapCount is set: if
+  /// it is, the arrays are runtime-sized and indexed directly by \p Index;
+  /// otherwise they are constant-sized (\p Info.NumberOfPtrs elements) and
+  /// indexed as fixed-length arrays.
+  ///
+  /// \param Builder The IRBuilder used to create the stores.
+  /// \param RTArgs The offloading arrays the entry is written into, i.e. the
+  ///        base pointers, pointers, sizes, map types, optional map types for
+  ///        the region end, mappers and optional map names.
+  /// \param Info The target data info that selects runtime- or constant-sized
+  ///        addressing and that receives device-pointer bookkeeping in
+  ///        \c DevicePtrInfoMap and the \c HasMapper flag.
+  /// \param Index The element index at which the entry is stored.
+  /// \param BasePtr The base pointer stored into the base pointers array.
+  /// \param Ptr The section pointer stored into the pointers array.
+  /// \param Size The element size in bytes. If null, no size is stored.
+  /// \param MapType The map type bits. If null, no map type is stored.
+  /// \param MapTypeEnd The map type bits for the region end, stored into the
+  ///        map types end array when that array exists. Defaults to \p MapType
+  ///        when null.
+  /// \param MapperFunc The user-defined mapper. A null pointer is stored when
+  ///        absent, and \c Info.HasMapper is set when present.
+  /// \param MapName The mapping name, stored into the map names array when that
+  ///        array is allocated. A null pointer is stored when absent.
+  /// \param DevPtrType Whether the entry needs device-pointer or device-address
+  ///        bookkeeping in \c Info.DevicePtrInfoMap.
+  /// \param AllocaIP The insertion point to be used for the device-pointer
+  ///        alloca when \p DevPtrType is \c Pointer.
+  /// \param DeviceAddrCBIndex The index passed to \p DeviceAddrCB.
+  /// \param DeviceAddrCB Optional callback invoked with the generated device
+  ///        pointer or address for use_device_ptr / use_device_addr.
+  LLVM_ABI void emitOffloadingArraysMapEntry(
+      IRBuilderBase &Builder, TargetDataRTArgs &RTArgs, TargetDataInfo &Info,
+      Value *Index, Value *BasePtr, Value *Ptr, Value *Size, Value *MapType,
+      Value *MapTypeEnd = nullptr, Value *MapperFunc = nullptr,
+      Value *MapName = nullptr, DeviceInfoTy DevPtrType = DeviceInfoTy::None,
+      InsertPointTy AllocaIP = {}, unsigned DeviceAddrCBIndex = 0,
+      function_ref<void(unsigned int, Value *)> DeviceAddrCB = nullptr);
+
+  /// Allocate runtime-sized offloading arrays using \p Info.TotalMapCount.
+  ///
+  /// \param AllocaIP The insertion point to be used for alloca instructions
+  ///        when the element count is a constant or argument.
+  /// \param CodeGenIP The insertion point at which the arrays are allocated
+  ///        when the element count is a runtime value.
+  /// \param Info Holds the runtime element count (\c TotalMapCount) and
+  ///        receives the allocated arrays in \c Info.RTArgs.
+  /// \param EmitDebug If true, also allocate the \c .offload_mapnames array;
+  ///        otherwise it is left null.
+  LLVM_ABI void emitDynamicOffloadingArraysAllocas(InsertPointTy AllocaIP,
+                                                   InsertPointTy CodeGenIP,
+                                                   TargetDataInfo &Info,
+                                                   bool EmitDebug);
+
   /// Generate a target region entry call and host fallback call.
   ///
   /// \param Loc The location at which the request originated and is fulfilled.
@@ -2964,48 +3030,6 @@ public:
                                             MapInfosTy &CombinedInfo,
                                             TargetDataInfo &Info);
 
-  /// Store a single map entry into the constant-sized offloading arrays at
-  /// \p Index.
-  ///
-  /// The arrays have \p Info.NumberOfPtrs elements and are addressed with a
-  /// fixed-length-array GEP. Map types and names are constant for the whole
-  /// region and live in separate constant globals built by the caller, so
-  /// \p MapType, \p MapTypeEnd and \p MapName are passed as null here and the
-  /// corresponding stores are skipped.
-  ///
-  /// \param Builder The IRBuilder used to create the stores.
-  /// \param RTArgs The offloading arrays the entry is written into, i.e. the
-  ///        base pointers, pointers, sizes, map types, optional map types for
-  ///        the region end, mappers and optional map names.
-  /// \param Info The target data info that supplies the array length and
-  ///        receives device-pointer bookkeeping in \c DevicePtrInfoMap.
-  /// \param Index The element index at which the entry is stored.
-  /// \param BasePtr The base pointer stored into the base pointers array.
-  /// \param Ptr The section pointer stored into the pointers array.
-  /// \param Size The element size in bytes. If null, no size is stored.
-  /// \param MapType The map type bits. If null, no map type is stored.
-  /// \param MapTypeEnd The map type bits for the region end, stored into the
-  ///        map types end array when that array exists. Defaults to \p MapType
-  ///        when null.
-  /// \param MapperFunc The user-defined mapper. A null pointer is stored when
-  ///        absent.
-  /// \param MapName The mapping name, stored into the map names array when that
-  ///        array is allocated. A null pointer is stored when absent.
-  /// \param DevPtrType Whether the entry needs device-pointer or
-  ///        device-address bookkeeping in \c Info.DevicePtrInfoMap.
-  /// \param AllocaIP The insertion point to be used for the device-pointer
-  ///        alloca when \p DevPtrType is \c Pointer.
-  /// \param DeviceAddrCBIndex The index passed to \p DeviceAddrCB.
-  /// \param DeviceAddrCB Optional callback invoked with the generated device
-  ///        pointer or address for use_device_ptr / use_device_addr.
-  LLVM_ABI void emitOffloadingArraysMapEntry(
-      IRBuilderBase &Builder, TargetDataRTArgs &RTArgs, TargetDataInfo &Info,
-      Value *Index, Value *BasePtr, Value *Ptr, Value *Size, Value *MapType,
-      Value *MapTypeEnd = nullptr, Value *MapperFunc = nullptr,
-      Value *MapName = nullptr, DeviceInfoTy DevPtrType = DeviceInfoTy::None,
-      InsertPointTy AllocaIP = {}, unsigned DeviceAddrCBIndex = 0,
-      function_ref<void(unsigned int, Value *)> DeviceAddrCB = nullptr);
-
   /// Emit the arrays used to pass the captures and map information to the
   /// offloading runtime library. If there is no map or capture information,
   /// return nullptr by reference. Accepts a reference to a MapInfosTy object
@@ -3015,7 +3039,8 @@ public:
       InsertPointTy AllocaIP, InsertPointTy CodeGenIP, MapInfosTy &CombinedInfo,
       TargetDataInfo &Info, CustomMapperCallbackTy CustomMapperCB,
       bool IsNonContiguous = false,
-      function_ref<void(unsigned int, Value *)> DeviceAddrCB = nullptr);
+      function_ref<void(unsigned int, Value *)> DeviceAddrCB = nullptr,
+      DynMapEntriesCallbackTy DynMapEntriesCB = nullptr);
 
   /// Allocates memory for and populates the arrays required for offloading
   /// (offload_{baseptrs|ptrs|mappers|sizes|maptypes|mapnames}). Then, it
@@ -3028,7 +3053,8 @@ public:
       TargetDataRTArgs &RTArgs, MapInfosTy &CombinedInfo,
       CustomMapperCallbackTy CustomMapperCB, bool IsNonContiguous = false,
       bool ForEndCall = false,
-      function_ref<void(unsigned int, Value *)> DeviceAddrCB = nullptr);
+      function_ref<void(unsigned int, Value *)> DeviceAddrCB = nullptr,
+      DynMapEntriesCallbackTy DynMapEntriesCB = nullptr);
 
   /// Creates offloading entry for the provided entry ID \a ID, address \a
   /// Addr, size \a Size, and flags \a Flags.
@@ -3651,6 +3677,8 @@ public:
   /// \param BodyGenCB Optional Callback to generate the region code.
   /// \param DeviceAddrCB Optional callback to generate code related to
   /// use_device_ptr and use_device_addr.
+  /// \param SrcLocInfo Optional source location information.
+  /// \param DynMapEntriesCB Optional callback to fill dynamic map entries.
   LLVM_ABI InsertPointOrErrorTy createTargetData(
       const LocationDescription &Loc, InsertPointTy AllocaIP,
       InsertPointTy CodeGenIP, ArrayRef<BasicBlock *> DeallocBlocks,
@@ -3661,7 +3689,8 @@ public:
                                         BodyGenTy BodyGenType)>
           BodyGenCB = nullptr,
       function_ref<void(unsigned int, Value *)> DeviceAddrCB = nullptr,
-      Value *SrcLocInfo = nullptr);
+      Value *SrcLocInfo = nullptr,
+      DynMapEntriesCallbackTy DynMapEntriesCB = nullptr);
 
   using TargetBodyGenCallbackTy = function_ref<InsertPointOrErrorTy(
       InsertPointTy AllocaIP, InsertPointTy CodeGenIP,

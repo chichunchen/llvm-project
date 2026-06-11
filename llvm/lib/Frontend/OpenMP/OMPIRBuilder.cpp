@@ -8489,30 +8489,47 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTargetData(
     function_ref<InsertPointOrErrorTy(InsertPointTy CodeGenIP,
                                       BodyGenTy BodyGenType)>
         BodyGenCB,
-    function_ref<void(unsigned int, Value *)> DeviceAddrCB, Value *SrcLocInfo) {
+    function_ref<void(unsigned int, Value *)> DeviceAddrCB, Value *SrcLocInfo,
+    DynMapEntriesCallbackTy DynMapEntriesCB) {
   if (!updateToLocation(Loc))
     return InsertPointTy();
 
   Builder.restoreIP(CodeGenIP);
 
   bool IsStandAlone = !BodyGenCB;
-  MapInfosTy *MapInfo;
+  MapInfosTy *MapInfo = nullptr;
+
+  // Pre-allocate runtime-sized offloading arrays to dominate both begin/end
+  // mapper calls.
+  if (!IsStandAlone && DynMapEntriesCB) {
+    MapInfo = &GenMapInfoCB(Builder.saveIP());
+    if (Info.TotalMapCount)
+      emitDynamicOffloadingArraysAllocas(AllocaIP, Builder.saveIP(), Info,
+                                         DynMapEntriesCB ||
+                                             !MapInfo->Names.empty());
+  }
+
   // Generate the code for the opening of the data environment. Capture all the
   // arguments of the runtime call by reference because they are used in the
   // closing of the region.
   auto BeginThenGen = [&](InsertPointTy AllocaIP, InsertPointTy CodeGenIP,
                           ArrayRef<BasicBlock *> DeallocBlocks) -> Error {
-    MapInfo = &GenMapInfoCB(Builder.saveIP());
+    if (!MapInfo)
+      MapInfo = &GenMapInfoCB(Builder.saveIP());
     if (Error Err = emitOffloadingArrays(
             AllocaIP, Builder.saveIP(), *MapInfo, Info, CustomMapperCB,
-            /*IsNonContiguous=*/true, DeviceAddrCB))
+            /*IsNonContiguous=*/true, DeviceAddrCB, DynMapEntriesCB))
       return Err;
 
     TargetDataRTArgs RTArgs;
     emitOffloadingArraysArgument(Builder, RTArgs, Info);
 
     // Emit the number of elements in the offloading arrays.
-    Value *PointerNum = Builder.getInt32(Info.NumberOfPtrs);
+    Value *PointerNum =
+        Info.TotalMapCount
+            ? Builder.CreateIntCast(Info.TotalMapCount, Builder.getInt32Ty(),
+                                    /*isSigned=*/false, "map.count")
+            : Builder.getInt32(Info.NumberOfPtrs);
 
     // Source location for the ident struct
     if (!SrcLocInfo) {
@@ -8603,11 +8620,17 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTargetData(
   auto EndThenGen = [&](InsertPointTy AllocaIP, InsertPointTy CodeGenIP,
                         ArrayRef<BasicBlock *> DeallocBlocks) {
     TargetDataRTArgs RTArgs;
-    Info.EmitDebug = !MapInfo->Names.empty();
+    // Preserve EmitDebug if the begin call already set it (e.g. the iterator
+    // path allocated a names array), so the end call passes the same mapnames.
+    Info.EmitDebug = Info.EmitDebug || !MapInfo->Names.empty();
     emitOffloadingArraysArgument(Builder, RTArgs, Info, /*ForEndCall=*/true);
 
     // Emit the number of elements in the offloading arrays.
-    Value *PointerNum = Builder.getInt32(Info.NumberOfPtrs);
+    Value *PointerNum =
+        Info.TotalMapCount
+            ? Builder.CreateIntCast(Info.TotalMapCount, Builder.getInt32Ty(),
+                                    /*isSigned=*/false, "map.count")
+            : Builder.getInt32(Info.NumberOfPtrs);
 
     // Source location for the ident struct
     if (!SrcLocInfo) {
@@ -9621,10 +9644,11 @@ Error OpenMPIRBuilder::emitOffloadingArraysAndArgs(
     InsertPointTy AllocaIP, InsertPointTy CodeGenIP, TargetDataInfo &Info,
     TargetDataRTArgs &RTArgs, MapInfosTy &CombinedInfo,
     CustomMapperCallbackTy CustomMapperCB, bool IsNonContiguous,
-    bool ForEndCall, function_ref<void(unsigned int, Value *)> DeviceAddrCB) {
-  if (Error Err =
-          emitOffloadingArrays(AllocaIP, CodeGenIP, CombinedInfo, Info,
-                               CustomMapperCB, IsNonContiguous, DeviceAddrCB))
+    bool ForEndCall, function_ref<void(unsigned int, Value *)> DeviceAddrCB,
+    DynMapEntriesCallbackTy DynMapEntriesCB) {
+  if (Error Err = emitOffloadingArrays(AllocaIP, CodeGenIP, CombinedInfo, Info,
+                                       CustomMapperCB, IsNonContiguous,
+                                       DeviceAddrCB, DynMapEntriesCB))
     return Err;
   emitOffloadingArraysArgument(Builder, RTArgs, Info, ForEndCall);
   return Error::success();
@@ -10012,13 +10036,41 @@ void OpenMPIRBuilder::emitOffloadingArraysArgument(IRBuilderBase &Builder,
   auto Int64Ty = Type::getInt64Ty(M.getContext());
   auto Int64PtrTy = UnqualPtrTy;
 
-  if (!Info.NumberOfPtrs) {
+  if (!Info.NumberOfPtrs && !Info.TotalMapCount) {
     RTArgs.BasePointersArray = ConstantPointerNull::get(VoidPtrPtrTy);
     RTArgs.PointersArray = ConstantPointerNull::get(VoidPtrPtrTy);
     RTArgs.SizesArray = ConstantPointerNull::get(Int64PtrTy);
     RTArgs.MapTypesArray = ConstantPointerNull::get(Int64PtrTy);
     RTArgs.MapNamesArray = ConstantPointerNull::get(VoidPtrPtrTy);
     RTArgs.MappersArray = ConstantPointerNull::get(VoidPtrPtrTy);
+    return;
+  }
+
+  // Runtime-sized arrays (iterator modifier) are allocated as flat
+  // `alloca ElemTy, TotalMapCount`, so cast each alloca directly to the element
+  // pointer instead of using the fixed-length-array GEP of the path below,
+  // which relies on the static Info.NumberOfPtrs (`alloca [NumberOfPtrs x
+  // ElemTy]`).
+  if (Info.TotalMapCount) {
+    RTArgs.BasePointersArray =
+        Builder.CreatePointerCast(Info.RTArgs.BasePointersArray, VoidPtrPtrTy);
+    RTArgs.PointersArray =
+        Builder.CreatePointerCast(Info.RTArgs.PointersArray, VoidPtrPtrTy);
+    RTArgs.SizesArray =
+        Builder.CreatePointerCast(Info.RTArgs.SizesArray, Int64PtrTy);
+    RTArgs.MapTypesArray =
+        Builder.CreatePointerCast(ForEndCall && Info.RTArgs.MapTypesArrayEnd
+                                      ? Info.RTArgs.MapTypesArrayEnd
+                                      : Info.RTArgs.MapTypesArray,
+                                  Int64PtrTy);
+    RTArgs.MapNamesArray =
+        Info.EmitDebug
+            ? Builder.CreatePointerCast(Info.RTArgs.MapNamesArray, VoidPtrPtrTy)
+            : ConstantPointerNull::get(VoidPtrPtrTy);
+    RTArgs.MappersArray =
+        Info.HasMapper
+            ? Builder.CreatePointerCast(Info.RTArgs.MappersArray, VoidPtrPtrTy)
+            : ConstantPointerNull::get(VoidPtrPtrTy);
     return;
   }
 
@@ -10431,14 +10483,17 @@ void OpenMPIRBuilder::emitOffloadingArraysMapEntry(
     function_ref<void(unsigned int, Value *)> DeviceAddrCB) {
   Type *PtrTy = Builder.getPtrTy();
   Type *Int64Ty = Builder.getInt64Ty();
+  bool IsDynamic = Info.TotalMapCount != nullptr;
 
-  // Return the address of element Index in a constant-sized offloading array
-  // (Info.NumberOfPtrs elements) using a fixed-length-array GEP. Base, pointer
-  // and size arrays use an i32 index, while the mapper array keeps the pointer
-  // index width via UsePtrIndexWidth (otherwise the offload_mappers checks
-  // would need to be modified).
+  // Return the address of element Index in an offloading array.
+  //   Runtime-sized arrays are indexed directly
+  //   Constant-sized arrays use a fixed-length-array GEP.
+  // Base/pointer/size arrays use i32 indices while mapper arrays keep the pointer index
+  // width via UsePtrIndexWidth. (otherwise need to modify offload_mappers checks)
   auto getArrayElementAddress = [&](Value *Array, Type *ElemTy,
                                     bool UsePtrIndexWidth = false) -> Value * {
+    if (IsDynamic)
+      return Builder.CreateInBoundsGEP(ElemTy, Array, Index);
     Value *Zero = Builder.getInt32(0);
     Value *Idx = Index;
     if (UsePtrIndexWidth) {
@@ -10475,6 +10530,8 @@ void OpenMPIRBuilder::emitOffloadingArraysMapEntry(
         getArrayElementAddress(RTArgs.MapTypesArrayEnd, Int64Ty), Int64Align);
 
   Value *Mapper = MapperFunc ? MapperFunc : ConstantPointerNull::get(PtrTy);
+  if (MapperFunc)
+    Info.HasMapper = true;
   Builder.CreateAlignedStore(Mapper,
                              getArrayElementAddress(RTArgs.MappersArray, PtrTy,
                                                     /*UsePtrIndexWidth=*/true),
@@ -10502,147 +10559,258 @@ void OpenMPIRBuilder::emitOffloadingArraysMapEntry(
   }
 }
 
+void OpenMPIRBuilder::emitDynamicOffloadingArraysAllocas(
+    InsertPointTy AllocaIP, InsertPointTy CodeGenIP, TargetDataInfo &Info,
+    bool EmitDebug) {
+  assert(Info.TotalMapCount && "expected runtime map entry count");
+  assert(!Info.HasNoWait &&
+         "nowait with runtime-sized offloading arrays not yet supported");
+
+  Builder.restoreIP(
+      (isa<Constant>(Info.TotalMapCount) || isa<Argument>(Info.TotalMapCount))
+          ? AllocaIP
+          : CodeGenIP);
+  Type *PtrTy = Builder.getPtrTy();
+  Type *Int64Ty = Builder.getInt64Ty();
+  Info.RTArgs.BasePointersArray =
+      Builder.CreateAlloca(PtrTy, Info.TotalMapCount, ".offload_baseptrs");
+  Info.RTArgs.PointersArray =
+      Builder.CreateAlloca(PtrTy, Info.TotalMapCount, ".offload_ptrs");
+  Info.RTArgs.SizesArray =
+      Builder.CreateAlloca(Int64Ty, Info.TotalMapCount, ".offload_sizes");
+  Info.RTArgs.MapTypesArray =
+      Builder.CreateAlloca(Int64Ty, Info.TotalMapCount, ".offload_maptypes");
+  Info.RTArgs.MappersArray =
+      Builder.CreateAlloca(PtrTy, Info.TotalMapCount, ".offload_mappers");
+
+  Info.EmitDebug = Info.EmitDebug || EmitDebug;
+  if (Info.EmitDebug)
+    Info.RTArgs.MapNamesArray =
+        Builder.CreateAlloca(PtrTy, Info.TotalMapCount, ".offload_mapnames");
+  else
+    Info.RTArgs.MapNamesArray =
+        Constant::getNullValue(PointerType::getUnqual(Builder.getContext()));
+
+  if (Info.separateBeginEndCalls())
+    Info.RTArgs.MapTypesArrayEnd = Builder.CreateAlloca(
+        Int64Ty, Info.TotalMapCount, ".offload_maptypes_end");
+
+  restoreIPandDebugLoc(Builder, CodeGenIP);
+}
+
 Error OpenMPIRBuilder::emitOffloadingArrays(
     InsertPointTy AllocaIP, InsertPointTy CodeGenIP, MapInfosTy &CombinedInfo,
     TargetDataInfo &Info, CustomMapperCallbackTy CustomMapperCB,
     bool IsNonContiguous,
-    function_ref<void(unsigned int, Value *)> DeviceAddrCB) {
+    function_ref<void(unsigned int, Value *)> DeviceAddrCB,
+    DynMapEntriesCallbackTy DynMapEntriesCB) {
+
+  // The caller may have pre-allocated the runtime-sized arrays (see
+  // createTargetData, which calls emitDynamicOffloadingArraysAllocas). Capture
+  // them now because clearArrayInfo() below resets Info.RTArgs.
+  TargetDataRTArgs PreallocatedRTArgs = Info.RTArgs;
 
   // Reset the array information.
   Info.clearArrayInfo();
   Info.NumberOfPtrs = CombinedInfo.BasePointers.size();
 
-  if (Info.NumberOfPtrs == 0)
+  if (Info.NumberOfPtrs == 0 && !Info.TotalMapCount)
     return Error::success();
 
-  Builder.restoreIP(AllocaIP);
-  // Detect if we have any capture size requiring runtime evaluation of the
-  // size so that a constant array could be eventually used.
-  ArrayType *PointerArrayType =
-      ArrayType::get(Builder.getPtrTy(), Info.NumberOfPtrs);
+  // The offloading arrays are filled in two stages: first they are allocated
+  // (runtime-sized when the entry count is only known at runtime, e.g. an
+  // iterator modifier on a map or motion clause, otherwise constant-sized),
+  // then a single shared loop stores one map entry at a time. The two
+  // allocation strategies differ in where the per-entry sizes, map types and
+  // names live: the runtime-sized path writes them with stores in the loop
+  // below, while the constant-sized path materializes them as constant globals
+  // here and lets the loop skip them.
+  const bool IsDynamic = Info.TotalMapCount != nullptr;
 
-  Info.RTArgs.BasePointersArray = Builder.CreateAlloca(
-      PointerArrayType, /* ArraySize = */ nullptr, ".offload_baseptrs");
+  PointerType *PtrTy = Builder.getPtrTy();
 
-  Info.RTArgs.PointersArray = Builder.CreateAlloca(
-      PointerArrayType, /* ArraySize = */ nullptr, ".offload_ptrs");
-  Info.RTArgs.MappersArray = Builder.CreateAlloca(
-      PointerArrayType, /* ArraySize = */ nullptr, ".offload_mappers");
-
-  // If we don't have any VLA types or other types that require runtime
-  // evaluation, we can use a constant array for the map sizes, otherwise we
-  // need to fill up the arrays as we do for the pointers.
-  Type *Int64Ty = Builder.getInt64Ty();
-  SmallVector<Constant *> ConstSizes(CombinedInfo.Sizes.size(),
-                                     ConstantInt::get(Int64Ty, 0));
+  // Records which entries need their size stored at runtime. Only populated and
+  // consulted by the constant-sized path; the runtime-sized path stores every
+  // size in the loop below.
   SmallBitVector RuntimeSizes(CombinedInfo.Sizes.size());
-  for (unsigned I = 0, E = CombinedInfo.Sizes.size(); I < E; ++I) {
+
+  if (IsDynamic) {
+    // Reuse the arrays the caller preallocated (see createTargetData) if
+    // present, otherwise allocate fresh runtime-sized arrays.
+    if (PreallocatedRTArgs.BasePointersArray)
+      Info.RTArgs = PreallocatedRTArgs;
+    else
+      emitDynamicOffloadingArraysAllocas(AllocaIP, CodeGenIP, Info,
+                                         DynMapEntriesCB ||
+                                             !CombinedInfo.Names.empty());
+  } else {
+    Builder.restoreIP(AllocaIP);
+    // Detect if we have any capture size requiring runtime evaluation of the
+    // size so that a constant array could be eventually used.
+    ArrayType *PointerArrayType =
+        ArrayType::get(Builder.getPtrTy(), Info.NumberOfPtrs);
+
+    Info.RTArgs.BasePointersArray = Builder.CreateAlloca(
+        PointerArrayType, /* ArraySize = */ nullptr, ".offload_baseptrs");
+
+    Info.RTArgs.PointersArray = Builder.CreateAlloca(
+        PointerArrayType, /* ArraySize = */ nullptr, ".offload_ptrs");
+    Info.RTArgs.MappersArray = Builder.CreateAlloca(
+        PointerArrayType, /* ArraySize = */ nullptr, ".offload_mappers");
+
+    // If we don't have any VLA types or other types that require runtime
+    // evaluation, we can use a constant array for the map sizes, otherwise we
+    // need to fill up the arrays as we do for the pointers.
+    Type *Int64Ty = Builder.getInt64Ty();
+    SmallVector<Constant *> ConstSizes(CombinedInfo.Sizes.size(),
+                                       ConstantInt::get(Int64Ty, 0));
+    for (unsigned I = 0, E = CombinedInfo.Sizes.size(); I < E; ++I) {
+      bool IsNonContigEntry =
+          IsNonContiguous &&
+          (static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(
+               CombinedInfo.Types[I] &
+               OpenMPOffloadMappingFlags::OMP_MAP_NON_CONTIG) != 0);
+      // For NON_CONTIG entries, ArgSizes stores the dimension count (number of
+      // descriptor_dim records), not the byte size.
+      if (IsNonContigEntry) {
+        assert(I < CombinedInfo.NonContigInfo.Dims.size() &&
+               "Index must be in-bounds for NON_CONTIG Dims array");
+        const uint64_t DimCount = CombinedInfo.NonContigInfo.Dims[I];
+        assert(DimCount > 0 && "NON_CONTIG DimCount must be > 0");
+        ConstSizes[I] = ConstantInt::get(Int64Ty, DimCount);
+        continue;
+      }
+      if (auto *CI = dyn_cast<Constant>(CombinedInfo.Sizes[I])) {
+        if (!isa<ConstantExpr>(CI) && !isa<GlobalValue>(CI)) {
+          ConstSizes[I] = CI;
+          continue;
+        }
+      }
+      RuntimeSizes.set(I);
+    }
+
+    if (RuntimeSizes.all()) {
+      ArrayType *SizeArrayType = ArrayType::get(Int64Ty, Info.NumberOfPtrs);
+      Info.RTArgs.SizesArray = Builder.CreateAlloca(
+          SizeArrayType, /* ArraySize = */ nullptr, ".offload_sizes");
+      restoreIPandDebugLoc(Builder, CodeGenIP);
+    } else {
+      auto *SizesArrayInit = ConstantArray::get(
+          ArrayType::get(Int64Ty, ConstSizes.size()), ConstSizes);
+      std::string Name = createPlatformSpecificName({"offload_sizes"});
+      auto *SizesArrayGbl =
+          new GlobalVariable(M, SizesArrayInit->getType(), /*isConstant=*/true,
+                             GlobalValue::PrivateLinkage, SizesArrayInit, Name);
+      SizesArrayGbl->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+
+      if (!RuntimeSizes.any()) {
+        Info.RTArgs.SizesArray = SizesArrayGbl;
+      } else {
+        unsigned IndexSize = M.getDataLayout().getIndexSizeInBits(0);
+        Align OffloadSizeAlign =
+            M.getDataLayout().getABIIntegerTypeAlignment(64);
+        ArrayType *SizeArrayType = ArrayType::get(Int64Ty, Info.NumberOfPtrs);
+        AllocaInst *Buffer = Builder.CreateAlloca(
+            SizeArrayType, /* ArraySize = */ nullptr, ".offload_sizes");
+        Buffer->setAlignment(OffloadSizeAlign);
+        restoreIPandDebugLoc(Builder, CodeGenIP);
+        Builder.CreateMemCpy(
+            Buffer, M.getDataLayout().getPrefTypeAlign(Buffer->getType()),
+            SizesArrayGbl, OffloadSizeAlign,
+            Builder.getIntN(
+                IndexSize,
+                Buffer->getAllocationSize(M.getDataLayout())->getFixedValue()));
+
+        Info.RTArgs.SizesArray = Buffer;
+      }
+      restoreIPandDebugLoc(Builder, CodeGenIP);
+    }
+
+    // The map types are always constant so we don't need to generate code to
+    // fill arrays. Instead, we create an array constant.
+    SmallVector<uint64_t, 4> Mapping;
+    for (auto mapFlag : CombinedInfo.Types)
+      Mapping.push_back(
+          static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(
+              mapFlag));
+    std::string MaptypesName = createPlatformSpecificName({"offload_maptypes"});
+    auto *MapTypesArrayGbl = createOffloadMaptypes(Mapping, MaptypesName);
+    Info.RTArgs.MapTypesArray = MapTypesArrayGbl;
+
+    // The information types are only built if provided.
+    if (!CombinedInfo.Names.empty()) {
+      auto *MapNamesArrayGbl = createOffloadMapnames(
+          CombinedInfo.Names, createPlatformSpecificName({"offload_mapnames"}));
+      Info.RTArgs.MapNamesArray = MapNamesArrayGbl;
+      Info.EmitDebug = true;
+    } else {
+      Info.RTArgs.MapNamesArray =
+          Constant::getNullValue(PointerType::getUnqual(Builder.getContext()));
+      Info.EmitDebug = false;
+    }
+
+    // If there's a present map type modifier, it must not be applied to the end
+    // of a region, so generate a separate map type array in that case.
+    if (Info.separateBeginEndCalls()) {
+      bool EndMapTypesDiffer = false;
+      for (uint64_t &Type : Mapping) {
+        if (Type &
+            static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(
+                OpenMPOffloadMappingFlags::OMP_MAP_PRESENT)) {
+          Type &=
+              ~static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(
+                  OpenMPOffloadMappingFlags::OMP_MAP_PRESENT);
+          EndMapTypesDiffer = true;
+        }
+      }
+      if (EndMapTypesDiffer) {
+        MapTypesArrayGbl = createOffloadMaptypes(Mapping, MaptypesName);
+        Info.RTArgs.MapTypesArrayEnd = MapTypesArrayGbl;
+      }
+    }
+  }
+
+  // Shared per-entry store loop. Both allocation strategies funnel through
+  // emitOffloadingArraysMapEntry; they only differ in which values are written
+  // here. The constant-sized path passes null for the size (unless it must be
+  // evaluated at runtime), map type and name because those already live in the
+  // constant globals built above, and emitOffloadingArraysMapEntry skips the
+  // corresponding stores.
+  for (unsigned I = 0; I < Info.NumberOfPtrs; ++I) {
     bool IsNonContigEntry =
         IsNonContiguous &&
         (static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(
              CombinedInfo.Types[I] &
              OpenMPOffloadMappingFlags::OMP_MAP_NON_CONTIG) != 0);
-    // For NON_CONTIG entries, ArgSizes stores the dimension count (number of
-    // descriptor_dim records), not the byte size.
-    if (IsNonContigEntry) {
-      assert(I < CombinedInfo.NonContigInfo.Dims.size() &&
-             "Index must be in-bounds for NON_CONTIG Dims array");
-      const uint64_t DimCount = CombinedInfo.NonContigInfo.Dims[I];
-      assert(DimCount > 0 && "NON_CONTIG DimCount must be > 0");
-      ConstSizes[I] = ConstantInt::get(Int64Ty, DimCount);
-      continue;
-    }
-    if (auto *CI = dyn_cast<Constant>(CombinedInfo.Sizes[I])) {
-      if (!isa<ConstantExpr>(CI) && !isa<GlobalValue>(CI)) {
-        ConstSizes[I] = CI;
-        continue;
+
+    Value *Size = nullptr;
+    if (IsDynamic) {
+      Size = CombinedInfo.Sizes[I];
+      // For NON_CONTIG entries the stored size is the dimension count.
+      if (IsNonContigEntry) {
+        assert(I < CombinedInfo.NonContigInfo.Dims.size() &&
+               "Index must be in-bounds for NON_CONTIG Dims array");
+        const uint64_t DimCount = CombinedInfo.NonContigInfo.Dims[I];
+        assert(DimCount > 0 && "NON_CONTIG DimCount must be > 0");
+        Size = Builder.getInt64(DimCount);
       }
+    } else if (RuntimeSizes.test(I)) {
+      Size = CombinedInfo.Sizes[I];
     }
-    RuntimeSizes.set(I);
-  }
 
-  if (RuntimeSizes.all()) {
-    ArrayType *SizeArrayType = ArrayType::get(Int64Ty, Info.NumberOfPtrs);
-    Info.RTArgs.SizesArray = Builder.CreateAlloca(
-        SizeArrayType, /* ArraySize = */ nullptr, ".offload_sizes");
-    restoreIPandDebugLoc(Builder, CodeGenIP);
-  } else {
-    auto *SizesArrayInit = ConstantArray::get(
-        ArrayType::get(Int64Ty, ConstSizes.size()), ConstSizes);
-    std::string Name = createPlatformSpecificName({"offload_sizes"});
-    auto *SizesArrayGbl =
-        new GlobalVariable(M, SizesArrayInit->getType(), /*isConstant=*/true,
-                           GlobalValue::PrivateLinkage, SizesArrayInit, Name);
-    SizesArrayGbl->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-
-    if (!RuntimeSizes.any()) {
-      Info.RTArgs.SizesArray = SizesArrayGbl;
-    } else {
-      unsigned IndexSize = M.getDataLayout().getIndexSizeInBits(0);
-      Align OffloadSizeAlign = M.getDataLayout().getABIIntegerTypeAlignment(64);
-      ArrayType *SizeArrayType = ArrayType::get(Int64Ty, Info.NumberOfPtrs);
-      AllocaInst *Buffer = Builder.CreateAlloca(
-          SizeArrayType, /* ArraySize = */ nullptr, ".offload_sizes");
-      Buffer->setAlignment(OffloadSizeAlign);
-      restoreIPandDebugLoc(Builder, CodeGenIP);
-      Builder.CreateMemCpy(
-          Buffer, M.getDataLayout().getPrefTypeAlign(Buffer->getType()),
-          SizesArrayGbl, OffloadSizeAlign,
-          Builder.getIntN(
-              IndexSize,
-              Buffer->getAllocationSize(M.getDataLayout())->getFixedValue()));
-
-      Info.RTArgs.SizesArray = Buffer;
+    Value *MapType = nullptr;
+    Value *MapTypeEnd = nullptr;
+    if (IsDynamic) {
+      using FlagsTy = std::underlying_type_t<OpenMPOffloadMappingFlags>;
+      auto Flags = static_cast<FlagsTy>(CombinedInfo.Types[I]);
+      MapType = Builder.getInt64(Flags);
+      MapTypeEnd = Builder.getInt64(
+          Flags &
+          ~static_cast<FlagsTy>(OpenMPOffloadMappingFlags::OMP_MAP_PRESENT));
     }
-    restoreIPandDebugLoc(Builder, CodeGenIP);
-  }
-
-  // The map types are always constant so we don't need to generate code to
-  // fill arrays. Instead, we create an array constant.
-  SmallVector<uint64_t, 4> Mapping;
-  for (auto mapFlag : CombinedInfo.Types)
-    Mapping.push_back(
-        static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(
-            mapFlag));
-  std::string MaptypesName = createPlatformSpecificName({"offload_maptypes"});
-  auto *MapTypesArrayGbl = createOffloadMaptypes(Mapping, MaptypesName);
-  Info.RTArgs.MapTypesArray = MapTypesArrayGbl;
-
-  // The information types are only built if provided.
-  if (!CombinedInfo.Names.empty()) {
-    auto *MapNamesArrayGbl = createOffloadMapnames(
-        CombinedInfo.Names, createPlatformSpecificName({"offload_mapnames"}));
-    Info.RTArgs.MapNamesArray = MapNamesArrayGbl;
-    Info.EmitDebug = true;
-  } else {
-    Info.RTArgs.MapNamesArray =
-        Constant::getNullValue(PointerType::getUnqual(Builder.getContext()));
-    Info.EmitDebug = false;
-  }
-
-  // If there's a present map type modifier, it must not be applied to the end
-  // of a region, so generate a separate map type array in that case.
-  if (Info.separateBeginEndCalls()) {
-    bool EndMapTypesDiffer = false;
-    for (uint64_t &Type : Mapping) {
-      if (Type & static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(
-                     OpenMPOffloadMappingFlags::OMP_MAP_PRESENT)) {
-        Type &= ~static_cast<std::underlying_type_t<OpenMPOffloadMappingFlags>>(
-            OpenMPOffloadMappingFlags::OMP_MAP_PRESENT);
-        EndMapTypesDiffer = true;
-      }
-    }
-    if (EndMapTypesDiffer) {
-      MapTypesArrayGbl = createOffloadMaptypes(Mapping, MaptypesName);
-      Info.RTArgs.MapTypesArrayEnd = MapTypesArrayGbl;
-    }
-  }
-
-  PointerType *PtrTy = Builder.getPtrTy();
-  for (unsigned I = 0; I < Info.NumberOfPtrs; ++I) {
-    // Compile-time-constant sizes live in the constant global built above; only
-    // entries flagged in RuntimeSizes need a per-entry size store.
-    Value *Size = RuntimeSizes.test(I) ? CombinedInfo.Sizes[I] : nullptr;
+    Value *MapName = (IsDynamic && I < CombinedInfo.Names.size())
+                         ? CombinedInfo.Names[I]
+                         : nullptr;
 
     Value *MapperFunc = nullptr;
     auto CustomMFunc = CustomMapperCB(I);
@@ -10652,25 +10820,29 @@ Error OpenMPIRBuilder::emitOffloadingArrays(
       MapperFunc = Builder.CreatePointerCast(*CustomMFunc, PtrTy);
 
     // DevicePointers is only populated when device-pointer info is required, so
-    // only index it then.
+    // only index it then; emitOffloadingArraysMapEntry likewise consults the
+    // type only under the same condition.
     DeviceInfoTy DevPtrType = Info.requiresDevicePointerInfo()
                                   ? CombinedInfo.DevicePointers[I]
                                   : DeviceInfoTy::None;
 
-    // The map types and names are constant for the whole region and already
-    // live in the constant globals built above, so they are passed as null and
-    // not stored per entry.
+    Value *Index = IsDynamic ? Builder.getInt64(I) : Builder.getInt32(I);
     emitOffloadingArraysMapEntry(
-        Builder, Info.RTArgs, Info, Builder.getInt32(I),
-        CombinedInfo.BasePointers[I], CombinedInfo.Pointers[I], Size,
-        /*MapType=*/nullptr, /*MapTypeEnd=*/nullptr, MapperFunc,
-        /*MapName=*/nullptr, DevPtrType, AllocaIP, I, DeviceAddrCB);
+        Builder, Info.RTArgs, Info, Index, CombinedInfo.BasePointers[I],
+        CombinedInfo.Pointers[I], Size, MapType, MapTypeEnd, MapperFunc,
+        MapName, DevPtrType, AllocaIP, I, DeviceAddrCB);
   }
 
-  if (!IsNonContiguous || CombinedInfo.NonContigInfo.Offsets.empty() ||
-      Info.NumberOfPtrs == 0)
-    return Error::success();
-  emitNonContiguousDescriptor(AllocaIP, CodeGenIP, CombinedInfo, Info);
+  // Shared non-contiguous descriptor emission.
+  if (IsNonContiguous && !CombinedInfo.NonContigInfo.Offsets.empty() &&
+      Info.NumberOfPtrs != 0)
+    emitNonContiguousDescriptor(AllocaIP, CodeGenIP, CombinedInfo, Info);
+
+  // The runtime-sized path hands the filled arrays back to the caller, which
+  // emits the remaining (dynamic) entries.
+  if (IsDynamic && DynMapEntriesCB)
+    return DynMapEntriesCB(Builder.saveIP(), Info.RTArgs, Info.NumberOfPtrs);
+
   return Error::success();
 }
 
