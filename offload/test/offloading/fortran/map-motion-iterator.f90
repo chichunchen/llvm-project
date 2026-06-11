@@ -148,11 +148,16 @@ program map_motion_iterator
   end do
   !$omp target update to(iterator(i = 1:n:2): g(i)) nowait
   !$omp taskwait
-  !$omp target map(present, alloc: g(1)) map(present, alloc: g(3)) &
-  !$omp&       map(present, alloc: g(5)) map(present, alloc: g(7))
+  !$omp target map(present, alloc: g(1))
     g(1) = g(1) + 1
+  !$omp end target
+  !$omp target map(present, alloc: g(3))
     g(3) = g(3) + 1
+  !$omp end target
+  !$omp target map(present, alloc: g(5))
     g(5) = g(5) + 1
+  !$omp end target
+  !$omp target map(present, alloc: g(7))
     g(7) = g(7) + 1
   !$omp end target
   do i = 1, n, 2
@@ -191,15 +196,21 @@ program map_motion_iterator
     t(i) = i
   end do
   !$omp target enter data map(to: r) map(iterator(i = 1:n:2), to: t(i))
-  !$omp target map(present, alloc: r) map(present, alloc: t(1)) &
-  !$omp&       map(present, alloc: t(3)) map(present, alloc: t(5)) &
-  !$omp&       map(present, alloc: t(7))
+  !$omp target map(present, alloc: r)
     do i = 1, n
       r(i) = 800 + i
     end do
+  !$omp end target
+  !$omp target map(present, alloc: t(1))
     t(1) = 91
+  !$omp end target
+  !$omp target map(present, alloc: t(3))
     t(3) = 93
+  !$omp end target
+  !$omp target map(present, alloc: t(5))
     t(5) = 95
+  !$omp end target
+  !$omp target map(present, alloc: t(7))
     t(7) = 97
   !$omp end target
   do i = 1, n
@@ -247,4 +258,3 @@ program map_motion_iterator
   print *, "multi iter v:", v
 
 end program map_motion_iterator
-
