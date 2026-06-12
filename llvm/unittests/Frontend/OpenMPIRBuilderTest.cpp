@@ -8253,6 +8253,148 @@ TEST_F(OpenMPIRBuilderTest, EmitDynamicOffloadingArraysMapEntries) {
   EXPECT_FALSE(verifyModule(*M, &errs()));
 }
 
+// A standalone 'nowait' target data construct with a runtime (dynamic) map
+// count must keep its offloading arrays alive across the deferred target task.
+// The arrays are allocated on the OpenMP heap (__kmpc_alloc), the mapper call
+// is deferred into a task (__kmpc_omp_target_task_alloc), and the arrays are
+// freed inside the task body (__kmpc_free). They must NOT be privatized into a
+// fixed-size task-privates struct (which previously truncated them to a single
+// element).
+TEST_F(OpenMPIRBuilderTest, TargetDataNoWaitDynamicHeapArrays) {
+  OpenMPIRBuilder OMPBuilder(*M);
+  OMPBuilder.initialize();
+  F->setName("func");
+  IRBuilder<> Builder(BB);
+  OpenMPIRBuilder::LocationDescription Loc({Builder.saveIP(), DL});
+  // Host-side code generation for the target data construct.
+  OMPBuilder.setConfig(
+      OpenMPIRBuilderConfig(/*IsTargetDevice=*/false, /*IsGPU=*/false,
+                            /*OpenMPOffloadMandatory=*/false,
+                            /*HasRequiresReverseOffload=*/false,
+                            /*HasRequiresUnifiedAddress=*/false,
+                            /*HasRequiresUnifiedSharedMemory=*/false,
+                            /*HasRequiresDynamicAllocators=*/false));
+
+  using InsertPointTy = OpenMPIRBuilder::InsertPointTy;
+
+  // HasNoWait selects the heap-allocated offloading-array path. The map count
+  // is kept as a runtime (non-constant) value so the allocation size and the
+  // mapper-call count operand stay runtime SSA values, which makes the
+  // no-truncation / heap-size assertions below non-vacuous.
+  AllocaInst *CountStorage =
+      Builder.CreateAlloca(Builder.getInt64Ty(), nullptr, "count.storage");
+  Value *DynCount =
+      Builder.CreateLoad(Builder.getInt64Ty(), CountStorage, "dyn.count");
+
+  AllocaInst *StaticPtr =
+      Builder.CreateAlloca(Builder.getInt32Ty(), nullptr, "static.ptr");
+
+  IRBuilder<>::InsertPoint AllocaIP(&F->getEntryBlock(),
+                                    F->getEntryBlock().getFirstInsertionPt());
+
+  llvm::OpenMPIRBuilder::MapInfosTy CombinedInfo;
+  auto GenMapInfoCB =
+      [&](InsertPointTy CodeGenIP) -> llvm::OpenMPIRBuilder::MapInfosTy & {
+    Builder.restoreIP(CodeGenIP);
+    uint32_t Tmp;
+    CombinedInfo.BasePointers.emplace_back(StaticPtr);
+    CombinedInfo.Pointers.emplace_back(StaticPtr);
+    CombinedInfo.DevicePointers.emplace_back(
+        llvm::OpenMPIRBuilder::DeviceInfoTy::None);
+    CombinedInfo.Sizes.emplace_back(Builder.getInt64(4));
+    CombinedInfo.Types.emplace_back(
+        llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO);
+    CombinedInfo.Names.emplace_back(
+        OMPBuilder.getOrCreateSrcLocStr("unknown", Tmp));
+    return CombinedInfo;
+  };
+
+  auto CustomMapperCB = [&](unsigned int) -> Expected<Function *> {
+    return static_cast<Function *>(nullptr);
+  };
+
+  // The dynamic-entries callback runs after the arrays are allocated; for this
+  // IR-structure test it does not need to populate entries.
+  bool DynamicCBWasCalled = false;
+  auto DynMapEntriesCB = [&](InsertPointTy CodeGenIP,
+                             OpenMPIRBuilder::TargetDataRTArgs &,
+                             unsigned) -> Error {
+    DynamicCBWasCalled = true;
+    Builder.restoreIP(CodeGenIP);
+    return Error::success();
+  };
+
+  llvm::OpenMPIRBuilder::TargetDataInfo Info(
+      /*RequiresDevicePointerInfo=*/false, /*SeparateBeginEndCalls=*/true);
+  Info.HasNoWait = true;
+  Info.TotalMapCount = DynCount;
+
+  llvm::omp::RuntimeFunction RTLFunc =
+      OMPRTL___tgt_target_data_begin_nowait_mapper;
+  ASSERT_EXPECTED_INIT(
+      OpenMPIRBuilder::InsertPointTy, AfterIP,
+      OMPBuilder.createTargetData(
+          Loc, AllocaIP, Builder.saveIP(), {}, Builder.getInt64(/*DeviceID=*/2),
+          /*IfCond=*/nullptr, Info, GenMapInfoCB, CustomMapperCB, &RTLFunc,
+          /*BodyGenCB=*/nullptr, /*DeviceAddrCB=*/nullptr,
+          /*SrcLocInfo=*/nullptr, DynMapEntriesCB));
+  Builder.restoreIP(AfterIP);
+  Builder.CreateRetVoid();
+
+  // Outlining of the deferred target task happens during finalize().
+  OMPBuilder.finalize();
+  EXPECT_TRUE(DynamicCBWasCalled);
+  EXPECT_FALSE(verifyModule(*M, &errs()));
+
+  auto CountCalls = [&](StringRef Name) {
+    unsigned N = 0;
+    for (Function &Fn : *M)
+      for (Instruction &I : instructions(Fn))
+        if (auto *CI = dyn_cast<CallInst>(&I))
+          if (CI->getCalledFunction() &&
+              CI->getCalledFunction()->getName() == Name)
+            ++N;
+    return N;
+  };
+
+  // The always-present offloading arrays (base pointers, pointers, sizes, map
+  // types, mappers) plus, for a separate begin/end construct, the end map-types
+  // array and (with debug info) the map-names array are heap-allocated, and
+  // each is freed exactly once. Mirroring the production caller, which uses
+  // SeparateBeginEndCalls, there are at least six such arrays.
+  unsigned NumAllocs = CountCalls("__kmpc_alloc");
+  unsigned NumFrees = CountCalls("__kmpc_free");
+  EXPECT_GE(NumAllocs, 6u);
+  EXPECT_EQ(NumAllocs, NumFrees);
+
+  // The mapper call is deferred into a target task and uses the nowait mapper.
+  EXPECT_EQ(CountCalls("__kmpc_omp_target_task_alloc"), 1u);
+  EXPECT_EQ(CountCalls("__tgt_target_data_begin_nowait_mapper"), 1u);
+
+  // The deferred mapper call is passed the full runtime map count (a live-in
+  // value, not a constant), confirming it reads every entry rather than a
+  // single truncated element. Operand 2 of the mapper call is the map count.
+  for (Function &Fn : *M)
+    for (Instruction &I : instructions(Fn))
+      if (auto *CI = dyn_cast<CallInst>(&I))
+        if (CI->getCalledFunction() &&
+            CI->getCalledFunction()->getName() ==
+                "__tgt_target_data_begin_nowait_mapper")
+          EXPECT_FALSE(isa<ConstantInt>(CI->getArgOperand(2)));
+
+  // The heap allocations are sized from the runtime map count, not a constant,
+  // confirming the arrays hold all entries rather than a truncated copy.
+  bool FoundRuntimeSizedAlloc = false;
+  for (Function &Fn : *M)
+    for (Instruction &I : instructions(Fn))
+      if (auto *CI = dyn_cast<CallInst>(&I))
+        if (CI->getCalledFunction() &&
+            CI->getCalledFunction()->getName() == "__kmpc_alloc")
+          if (!isa<ConstantInt>(CI->getArgOperand(1)))
+            FoundRuntimeSizedAlloc = true;
+  EXPECT_TRUE(FoundRuntimeSizedAlloc);
+}
+
 TEST_F(OpenMPIRBuilderTest, OffloadEntriesInfoManager) {
   OpenMPIRBuilder OMPBuilder(*M);
   OMPBuilder.setConfig(

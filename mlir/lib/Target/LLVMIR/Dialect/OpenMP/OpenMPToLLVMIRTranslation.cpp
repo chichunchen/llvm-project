@@ -417,14 +417,6 @@ static LogicalResult checkImplementationStatus(Operation &op) {
     if (!op.getMapIterated().empty())
       result = todo("map/motion clause with iterator modifier");
   };
-  // A 'nowait' motion construct that also uses an iterator modifier needs its
-  // runtime-sized offloading arrays to outlive the deferred target task. That
-  // is handled separately; reject the combination for now so it is not lowered
-  // through the synchronous (stack-allocated) path.
-  auto checkNowaitIterator = [&todo](auto op, LogicalResult &result) {
-    if (op.getNowait() && !op.getMapIterated().empty())
-      result = todo("nowait with map/motion iterator modifier");
-  };
 
   auto checkDynGroupprivate = [&todo](auto op, LogicalResult &result) {
     if (op.getDynGroupprivateSize())
@@ -501,14 +493,9 @@ static LogicalResult checkImplementationStatus(Operation &op) {
         if (totalBits > 128)
           result = todo("compare for complex types wider than 128 bits");
       })
-      .Case<omp::TargetEnterDataOp, omp::TargetExitDataOp>([&](auto op) {
-        checkDepend(op, result);
-        checkNowaitIterator(op, result);
-      })
-      .Case([&](omp::TargetUpdateOp op) {
-        checkDepend(op, result);
-        checkNowaitIterator(op, result);
-      })
+      .Case<omp::TargetEnterDataOp, omp::TargetExitDataOp>(
+          [&](auto op) { checkDepend(op, result); })
+      .Case([&](omp::TargetUpdateOp op) { checkDepend(op, result); })
       .Case([&](omp::TargetOp op) {
         checkAllocate(op, result);
         checkBare(op, result);

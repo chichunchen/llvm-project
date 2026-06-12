@@ -8501,6 +8501,14 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTargetData(
 
   if (!IsStandAlone && DynMapEntriesCB) {
     MapInfo = &GenMapInfoCB(Builder.saveIP());
+    // The 'nowait' heap-allocation path in emitDynamicOffloadingArraysAllocas
+    // relies on the standalone task body (below) to emit the matching
+    // __kmpc_free calls. A with-body 'target data' construct generates no such
+    // task, and the OpenMP spec gives it no 'nowait' clause, so it must never
+    // reach the heap path or the arrays would leak.
+    assert(!Info.HasNoWait &&
+           "with-body target data cannot be nowait; heap offloading arrays "
+           "would leak without a deferred task to free them");
     if (Info.TotalMapCount)
       emitDynamicOffloadingArraysAllocas(AllocaIP, Builder.saveIP(), Info,
                                          DynMapEntriesCB ||
@@ -8546,6 +8554,12 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTargetData(
     if (IsStandAlone) {
       assert(MapperFunc && "MapperFunc missing for standalone target data");
 
+      // Runtime-sized offloading arrays for a 'nowait' construct are allocated
+      // on the heap (see emitDynamicOffloadingArraysAllocas). They are read by
+      // the deferred task's mapper call and then freed in the task body.
+      bool RuntimeLivedOffloadArrays =
+          Info.HasNoWait && Info.TotalMapCount != nullptr;
+
       auto TaskBodyCB = [&](Value *, Value *,
                             IRBuilderBase::InsertPoint) -> Error {
         if (Info.HasNoWait) {
@@ -8565,6 +8579,28 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTargetData(
           emitBlock(OffloadContBlock, CurFn, /*IsFinished=*/true);
           Builder.restoreIP(Builder.saveIP());
         }
+
+        // Free the heap-allocated offloading arrays once the deferred task has
+        // issued its mapper runtime call. Emitting the frees here (inside the
+        // task body) ties their lifetime to the deferred task and gives them
+        // the task's own thread id after outlining.
+        if (RuntimeLivedOffloadArrays) {
+          Value *FreeThreadID = getOrCreateThreadID(SrcLocInfo);
+          Function *FreeFn = getOrCreateRuntimeFunctionPtr(OMPRTL___kmpc_free);
+          Constant *NullAllocator = Constant::getNullValue(VoidPtr);
+          for (Value *Arr :
+               {Info.RTArgs.BasePointersArray, Info.RTArgs.PointersArray,
+                Info.RTArgs.MappersArray, Info.RTArgs.MapNamesArray,
+                Info.RTArgs.MapTypesArray, Info.RTArgs.MapTypesArrayEnd,
+                Info.RTArgs.SizesArray}) {
+            // Skip null entries (e.g. map names without debug info, or an
+            // absent begin/end map-types array); only real heap allocations
+            // (non-constant pointers) are freed.
+            if (Arr && !isa<Constant>(Arr))
+              createRuntimeFunctionCall(FreeFn,
+                                        {FreeThreadID, Arr, NullAllocator});
+          }
+        }
         return Error::success();
       };
 
@@ -8574,7 +8610,8 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createTargetData(
                             /*TargetTaskAllocaIP=*/{}));
       else
         cantFail(emitTargetTask(TaskBodyCB, DeviceID, SrcLocInfo, AllocaIP,
-                                /*Dependencies=*/{}, RTArgs, Info.HasNoWait));
+                                /*Dependencies=*/{}, RTArgs, Info.HasNoWait,
+                                RuntimeLivedOffloadArrays));
     } else {
       Function *BeginMapperFunc = getOrCreateRuntimeFunctionPtr(
           omp::OMPRTL___tgt_target_data_begin_mapper);
@@ -9248,7 +9285,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::emitTargetTask(
     TargetTaskBodyCallbackTy TaskBodyCB, Value *DeviceID, Value *RTLoc,
     OpenMPIRBuilder::InsertPointTy AllocaIP,
     const DependenciesInfo &Dependencies, const TargetDataRTArgs &RTArgs,
-    bool HasNoWait) {
+    bool HasNoWait, bool RuntimeLivedOffloadArrays) {
 
   // The following explains the code-gen scenario for the `target` directive. A
   // similar scneario is followed for other device-related directives (e.g.
@@ -9410,7 +9447,12 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::emitTargetTask(
 
   SmallVector<Value *, 2> OffloadingArraysToPrivatize;
   bool NeedsTargetTask = HasNoWait && DeviceID;
-  if (NeedsTargetTask) {
+  // When the offloading arrays are runtime-lived (heap-allocated for a 'nowait'
+  // construct with a runtime map count), they already outlive the generating
+  // frame, so they must NOT be privatized into the task struct. Instead they
+  // are captured as ordinary task shareds (the heap pointers become live-ins of
+  // the outlined task body) and freed inside that body.
+  if (NeedsTargetTask && !RuntimeLivedOffloadArrays) {
     for (auto *V :
          {RTArgs.BasePointersArray, RTArgs.PointersArray, RTArgs.MappersArray,
           RTArgs.MapNamesArray, RTArgs.MapTypesArray, RTArgs.MapTypesArrayEnd,
@@ -10543,43 +10585,66 @@ void OpenMPIRBuilder::emitDynamicOffloadingArraysAllocas(
     InsertPointTy AllocaIP, InsertPointTy CodeGenIP, TargetDataInfo &Info,
     bool EmitDebug) {
   assert(Info.TotalMapCount && "expected runtime map entry count");
-  // These runtime-sized arrays are stack allocas, so they only live as long as
-  // the generating function frame. A 'nowait' construct defers the mapper call
-  // into a target task that may run after this frame is gone, which would need
-  // the arrays to be heap-allocated instead; that is handled separately. The
-  // MLIR frontend rejects 'nowait' combined with the iterator modifier before
-  // reaching this synchronous path.
-  assert(!Info.HasNoWait &&
-         "nowait with runtime-sized offloading arrays not yet supported");
 
-  Builder.restoreIP(
-      (isa<Constant>(Info.TotalMapCount) || isa<Argument>(Info.TotalMapCount))
-          ? AllocaIP
-          : CodeGenIP);
+  // For a 'nowait' target data / motion construct the offloading arrays are
+  // read by a deferred target task that may run after the generating stack
+  // frame has been torn down. Stack allocas would dangle, so allocate the
+  // runtime-sized arrays on the OpenMP heap via __kmpc_alloc instead; the
+  // matching __kmpc_free calls are emitted in the deferred task body (see
+  // createTargetData). The non-'nowait' path keeps using stack allocas.
+  bool UseHeap = Info.HasNoWait;
+
+  Builder.restoreIP((!UseHeap && (isa<Constant>(Info.TotalMapCount) ||
+                                  isa<Argument>(Info.TotalMapCount)))
+                        ? AllocaIP
+                        : CodeGenIP);
   Type *PtrTy = Builder.getPtrTy();
   Type *Int64Ty = Builder.getInt64Ty();
-  Info.RTArgs.BasePointersArray =
-      Builder.CreateAlloca(PtrTy, Info.TotalMapCount, ".offload_baseptrs");
-  Info.RTArgs.PointersArray =
-      Builder.CreateAlloca(PtrTy, Info.TotalMapCount, ".offload_ptrs");
-  Info.RTArgs.SizesArray =
-      Builder.CreateAlloca(Int64Ty, Info.TotalMapCount, ".offload_sizes");
-  Info.RTArgs.MapTypesArray =
-      Builder.CreateAlloca(Int64Ty, Info.TotalMapCount, ".offload_maptypes");
-  Info.RTArgs.MappersArray =
-      Builder.CreateAlloca(PtrTy, Info.TotalMapCount, ".offload_mappers");
+
+  // Values needed to emit the __kmpc_alloc calls on the heap path.
+  Value *ThreadID = nullptr;
+  Function *AllocFn = nullptr;
+  Constant *NullAllocator = nullptr;
+  if (UseHeap) {
+    uint32_t SrcLocStrSize;
+    Constant *SrcLocStr =
+        getOrCreateSrcLocStr(LocationDescription(Builder), SrcLocStrSize);
+    Value *Ident = getOrCreateIdent(SrcLocStr, SrcLocStrSize);
+    ThreadID = getOrCreateThreadID(Ident);
+    AllocFn = getOrCreateRuntimeFunctionPtr(OMPRTL___kmpc_alloc);
+    NullAllocator = Constant::getNullValue(VoidPtr);
+  }
+
+  // Allocate one runtime-sized offloading array of \p Info.TotalMapCount
+  // elements of \p ElemTy, on the stack by default or on the heap for 'nowait'.
+  auto allocOffloadArray = [&](Type *ElemTy, StringRef Name) -> Value * {
+    if (!UseHeap)
+      return Builder.CreateAlloca(ElemTy, Info.TotalMapCount, Name);
+    Value *NumElems =
+        Builder.CreateIntCast(Info.TotalMapCount, SizeTy, /*isSigned=*/false);
+    Value *NumBytes = Builder.CreateMul(
+        NumElems,
+        ConstantInt::get(SizeTy, M.getDataLayout().getTypeAllocSize(ElemTy)));
+    return createRuntimeFunctionCall(AllocFn,
+                                     {ThreadID, NumBytes, NullAllocator}, Name);
+  };
+
+  Info.RTArgs.BasePointersArray = allocOffloadArray(PtrTy, ".offload_baseptrs");
+  Info.RTArgs.PointersArray = allocOffloadArray(PtrTy, ".offload_ptrs");
+  Info.RTArgs.SizesArray = allocOffloadArray(Int64Ty, ".offload_sizes");
+  Info.RTArgs.MapTypesArray = allocOffloadArray(Int64Ty, ".offload_maptypes");
+  Info.RTArgs.MappersArray = allocOffloadArray(PtrTy, ".offload_mappers");
 
   Info.EmitDebug = Info.EmitDebug || EmitDebug;
   if (Info.EmitDebug)
-    Info.RTArgs.MapNamesArray =
-        Builder.CreateAlloca(PtrTy, Info.TotalMapCount, ".offload_mapnames");
+    Info.RTArgs.MapNamesArray = allocOffloadArray(PtrTy, ".offload_mapnames");
   else
     Info.RTArgs.MapNamesArray =
         Constant::getNullValue(PointerType::getUnqual(Builder.getContext()));
 
   if (Info.separateBeginEndCalls())
-    Info.RTArgs.MapTypesArrayEnd = Builder.CreateAlloca(
-        Int64Ty, Info.TotalMapCount, ".offload_maptypes_end");
+    Info.RTArgs.MapTypesArrayEnd =
+        allocOffloadArray(Int64Ty, ".offload_maptypes_end");
 
   restoreIPandDebugLoc(Builder, CodeGenIP);
 }

@@ -11,7 +11,7 @@ program map_motion_iterator
     integer :: v
   end type cell
   !$omp declare mapper(cell_mapper : cell :: cc) map(tofrom: cc%v)
-  integer :: a(n), b(n), c(n), d(n), e(n)
+  integer :: a(n), b(n), c(n), d(n), e(n), f(n), g(n), h(n)
   integer :: r(n), t(n), u(n), v(n)
   integer :: i, dyn_n, dyn_step
   logical :: use_device
@@ -148,6 +148,78 @@ program map_motion_iterator
 
   ! CHECK: declare mapper iter: 21 2 43 4 65 6 87 8
   print *, "declare mapper iter:", cells%v
+
+  ! nowait: target update from with iterator modifier.
+  do i = 1, n
+    f(i) = i
+  end do
+  !$omp target enter data map(to: f)
+  !$omp target
+    do i = 2, n, 2
+      f(i) = 300 + i
+    end do
+  !$omp end target
+  do i = 2, n, 2
+    f(i) = -100
+  end do
+  !$omp target update from(iterator(i = 2:n:2): f(i)) nowait
+  !$omp taskwait
+  !$omp target exit data map(delete: f)
+
+  ! CHECK: update from nowait: 1 302 3 304 5 306 7 308
+  print *, "update from nowait:", f
+
+  ! nowait: target enter data + target update to with iterator modifier.
+  do i = 1, n
+    g(i) = i
+  end do
+  !$omp target enter data map(iterator(i = 1:n:2), to: g(i)) nowait
+  !$omp taskwait
+  do i = 1, n, 2
+    g(i) = 400 + i
+  end do
+  !$omp target update to(iterator(i = 1:n:2): g(i)) nowait
+  !$omp taskwait
+  !$omp target map(present, alloc: g(1))
+    g(1) = g(1) + 1
+  !$omp end target
+  !$omp target map(present, alloc: g(3))
+    g(3) = g(3) + 1
+  !$omp end target
+  !$omp target map(present, alloc: g(5))
+    g(5) = g(5) + 1
+  !$omp end target
+  !$omp target map(present, alloc: g(7))
+    g(7) = g(7) + 1
+  !$omp end target
+  do i = 1, n, 2
+    g(i) = -100
+  end do
+  !$omp target update from(iterator(i = 1:n:2): g(i)) nowait
+  !$omp taskwait
+  !$omp target exit data map(delete: g)
+
+  ! CHECK: enter/update nowait: 402 2 404 4 406 6 408 8
+  print *, "enter/update nowait:", g
+
+  ! nowait: target exit data from with iterator modifier.
+  do i = 1, n
+    h(i) = i
+  end do
+  !$omp target enter data map(to: h)
+  !$omp target
+    do i = 1, n, 2
+      h(i) = 500 + i
+    end do
+  !$omp end target
+  do i = 1, n, 2
+    h(i) = -100
+  end do
+  !$omp target exit data map(iterator(i = 1:n:2), from: h(i)) nowait
+  !$omp taskwait
+
+  ! CHECK: exit data nowait: 501 2 503 4 505 6 507 8
+  print *, "exit data nowait:", h
 
   ! Stress: a whole-array static map and an iterator-expanded element map in the
   ! same target enter data, updated back with a static and an iterator motion.

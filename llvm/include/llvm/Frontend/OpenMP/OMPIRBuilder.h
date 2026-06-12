@@ -2969,11 +2969,17 @@ public:
   /// \param Dependencies Dependencies info as specified by the 'depend' clause.
   /// \param HasNoWait True if the target construct had 'nowait' on it, false
   ///        otherwise
-  LLVM_ABI InsertPointOrErrorTy
-  emitTargetTask(TargetTaskBodyCallbackTy TaskBodyCB, Value *DeviceID,
-                 Value *RTLoc, OpenMPIRBuilder::InsertPointTy AllocaIP,
-                 const DependenciesInfo &Dependencies,
-                 const TargetDataRTArgs &RTArgs, bool HasNoWait);
+  /// \param RuntimeLivedOffloadArrays True if the offloading arrays in \p
+  /// RTArgs
+  ///        are heap-allocated (e.g. for a 'nowait' construct with a runtime
+  ///        map count) and therefore already outlive the generating frame. In
+  ///        that case they are captured as ordinary task shareds instead of
+  ///        being privatized into the task struct.
+  LLVM_ABI InsertPointOrErrorTy emitTargetTask(
+      TargetTaskBodyCallbackTy TaskBodyCB, Value *DeviceID, Value *RTLoc,
+      OpenMPIRBuilder::InsertPointTy AllocaIP,
+      const DependenciesInfo &Dependencies, const TargetDataRTArgs &RTArgs,
+      bool HasNoWait, bool RuntimeLivedOffloadArrays = false);
 
   /// Emit the arguments to be passed to the runtime library based on the
   /// arrays of base pointers, pointers, sizes, map types, and mappers.  If

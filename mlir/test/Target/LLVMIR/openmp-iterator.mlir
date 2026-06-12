@@ -700,6 +700,43 @@ module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-a
     llvm.return
   }
 
+  llvm.func @target_update_map_iterator_nowait(%arr: !llvm.ptr) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c10 = llvm.mlir.constant(10 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+
+    %it = omp.iterator(%iv: i64) = (%c0 to %c10 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, i32)
+          map_clauses(to) capture(ByRef) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+
+    omp.target_update map_iterated(%it : !omp.iterated<!llvm.ptr>) nowait
+    llvm.return
+  }
+
+  llvm.func @target_enter_data_map_iterator_nowait(%arr: !llvm.ptr,
+                                                   %scalar: !llvm.ptr) {
+    %c0 = llvm.mlir.constant(0 : i64) : i64
+    %c10 = llvm.mlir.constant(10 : i64) : i64
+    %c1 = llvm.mlir.constant(1 : i64) : i64
+
+    %static_map = omp.map.info var_ptr(%scalar : !llvm.ptr, f64)
+        map_clauses(to) capture(ByRef) -> !llvm.ptr {name = "scalar"}
+
+    %it = omp.iterator(%iv: i64) = (%c0 to %c10 step %c1) {
+      %elem = llvm.getelementptr %arr[%iv] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+      %map = omp.map.info var_ptr(%elem : !llvm.ptr, i32)
+          map_clauses(to) capture(ByRef) -> !llvm.ptr {name = ""}
+      omp.yield(%map : !llvm.ptr)
+    } -> !omp.iterated<!llvm.ptr>
+
+    omp.target_enter_data map_entries(%static_map : !llvm.ptr)
+        map_iterated(%it : !omp.iterated<!llvm.ptr>) nowait {}
+    llvm.return
+  }
+
   // Stress: the iterator modifier composed with the other clauses each
   // target-data/motion directive allows (if, device, use_device_ptr,
   // use_device_addr). The iterator-expanded entries and any other clause
@@ -1000,6 +1037,34 @@ module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-a
 // TARGET: call void @__tgt_target_data_begin_mapper(ptr @{{.*}}, i64 -1, i32 3, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %[[MAPPERS_D]])
 // TARGET: call void @__tgt_target_data_end_mapper(ptr @{{.*}}, i64 -1, i32 3, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %{{.*}}, ptr %[[MAPPERS_D]])
 
+// A 'nowait' target_update with an iterator modifier must keep its offloading
+// arrays alive across the deferred task. The arrays are heap-allocated with
+// __kmpc_alloc (sized from the 11-trip count: 11 * 8 = 88 bytes) instead of
+// stack allocas, captured as task shareds, and the mapper call is deferred into
+// a target task.
+// TARGET-LABEL: define void @target_update_map_iterator_nowait
+// TARGET: call ptr @__kmpc_alloc(i32 %{{.*}}, i64 88, ptr null)
+// TARGET: call ptr @__kmpc_omp_target_task_alloc(
+// The deferred task body issues the mapper against the heap arrays it received
+// as shareds, then frees every one of them. Exactly one __kmpc_free per
+// allocation (the CHECK-NOT bounds the count to the task body so a double-free
+// regression is caught).
+// TARGET-LABEL: define internal void @target_update_map_iterator_nowait..omp_par
+// TARGET: call void @__tgt_target_data_update_nowait_mapper(ptr @{{.*}}, i64 -1, i32 11, ptr %{{.*}}offload_baseptrs, ptr %{{.*}}offload_ptrs,
+// TARGET-COUNT-7: call void @__kmpc_free(i32 %{{.*}}, ptr %{{.*}}, ptr null)
+// TARGET-NOT: call void @__kmpc_free
+
+// A 'nowait' target_enter_data mixing a static map with an iterator-expanded
+// map heap-allocates one combined set of arrays (1 static + 11 iterated = 12
+// entries, 12 * 8 = 96 bytes) and defers the begin mapper into a task.
+// TARGET-LABEL: define void @target_enter_data_map_iterator_nowait
+// TARGET: call ptr @__kmpc_alloc(i32 %{{.*}}, i64 96, ptr null)
+// TARGET: call ptr @__kmpc_omp_target_task_alloc(
+// TARGET-LABEL: define internal void @target_enter_data_map_iterator_nowait..omp_par
+// TARGET: call void @__tgt_target_data_begin_nowait_mapper(ptr @{{.*}}, i64 -1, i32 12, ptr %{{.*}}offload_baseptrs, ptr %{{.*}}offload_ptrs,
+// TARGET-COUNT-7: call void @__kmpc_free(i32 %{{.*}}, ptr %{{.*}}, ptr null)
+// TARGET-NOT: call void @__kmpc_free
+
 // The use_device_ptr entry (index 0) and the 5 iterator-expanded entries share
 // one offload array set (6 entries); the device pointer is read back after the
 // begin mapper. Both begin and end data mappers run for target data.
@@ -1038,3 +1103,4 @@ module attributes {omp.is_target_device = false, omp.target_triples = ["amdgcn-a
 // TARGET: %{{.*}} = icmp ult i64 %omp_map_iterator.iv, 5
 // TARGET: call void @__tgt_target_data_update_mapper(ptr @{{.*}}, i64 %[[DEV3]], i32 5, ptr %{{.*}}offload_baseptrs,
 
+// TARGET-LABEL: define internal void @.omp_target_task_proxy_func
