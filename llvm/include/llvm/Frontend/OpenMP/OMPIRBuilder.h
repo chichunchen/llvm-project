@@ -2964,6 +2964,48 @@ public:
                                             MapInfosTy &CombinedInfo,
                                             TargetDataInfo &Info);
 
+  /// Store a single map entry into the constant-sized offloading arrays at
+  /// \p Index.
+  ///
+  /// The arrays have \p Info.NumberOfPtrs elements and are addressed with a
+  /// fixed-length-array GEP. Map types and names are constant for the whole
+  /// region and live in separate constant globals built by the caller, so
+  /// \p MapType, \p MapTypeEnd and \p MapName are passed as null here and the
+  /// corresponding stores are skipped.
+  ///
+  /// \param Builder The IRBuilder used to create the stores.
+  /// \param RTArgs The offloading arrays the entry is written into, i.e. the
+  ///        base pointers, pointers, sizes, map types, optional map types for
+  ///        the region end, mappers and optional map names.
+  /// \param Info The target data info that supplies the array length and
+  ///        receives device-pointer bookkeeping in \c DevicePtrInfoMap.
+  /// \param Index The element index at which the entry is stored.
+  /// \param BasePtr The base pointer stored into the base pointers array.
+  /// \param Ptr The section pointer stored into the pointers array.
+  /// \param Size The element size in bytes. If null, no size is stored.
+  /// \param MapType The map type bits. If null, no map type is stored.
+  /// \param MapTypeEnd The map type bits for the region end, stored into the
+  ///        map types end array when that array exists. Defaults to \p MapType
+  ///        when null.
+  /// \param MapperFunc The user-defined mapper. A null pointer is stored when
+  ///        absent.
+  /// \param MapName The mapping name, stored into the map names array when that
+  ///        array is allocated. A null pointer is stored when absent.
+  /// \param DevPtrType Whether the entry needs device-pointer or
+  ///        device-address bookkeeping in \c Info.DevicePtrInfoMap.
+  /// \param AllocaIP The insertion point to be used for the device-pointer
+  ///        alloca when \p DevPtrType is \c Pointer.
+  /// \param DeviceAddrCBIndex The index passed to \p DeviceAddrCB.
+  /// \param DeviceAddrCB Optional callback invoked with the generated device
+  ///        pointer or address for use_device_ptr / use_device_addr.
+  LLVM_ABI void emitOffloadingArraysMapEntry(
+      IRBuilderBase &Builder, TargetDataRTArgs &RTArgs, TargetDataInfo &Info,
+      Value *Index, Value *BasePtr, Value *Ptr, Value *Size, Value *MapType,
+      Value *MapTypeEnd = nullptr, Value *MapperFunc = nullptr,
+      Value *MapName = nullptr, DeviceInfoTy DevPtrType = DeviceInfoTy::None,
+      InsertPointTy AllocaIP = {}, unsigned DeviceAddrCBIndex = 0,
+      function_ref<void(unsigned int, Value *)> DeviceAddrCB = nullptr);
+
   /// Emit the arrays used to pass the captures and map information to the
   /// offloading runtime library. If there is no map or capture information,
   /// return nullptr by reference. Accepts a reference to a MapInfosTy object
