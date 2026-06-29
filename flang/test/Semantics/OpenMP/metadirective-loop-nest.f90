@@ -51,6 +51,17 @@ subroutine collapse_too_deep_compiler_directive(n, a)
   end do
 end subroutine
 
+subroutine noncanonical_do_while(n)
+  integer :: n, i
+  i = 0
+  !ERROR: This construct requires a canonical loop nest
+  !$omp metadirective when(implementation={vendor(llvm)}: do) default(nothing)
+  !BECAUSE: DO WHILE loop is not a valid affected loop
+  do while (i < n)
+    i = i + 1
+  end do
+end subroutine
+
 subroutine collapse_too_deep_interface(n, a)
   integer :: n, a(n, n), i, j
   !ERROR: This construct requires a perfect nest of depth 3, but the associated nest is a perfect nest of depth 2
