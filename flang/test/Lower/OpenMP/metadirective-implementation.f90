@@ -31,8 +31,10 @@ end subroutine
 
 ! An inapplicable variant must not have its clauses lowered.
 ! CHECK-LABEL: func.func @_QPtest_inapplicable_assume()
+! CHECK-NOT:     llvm.intr.assume
 ! CHECK:         fir.call @_FortranAioOutputInteger32
 ! CHECK-NOT:     fir.call @_FortranAioOutputInteger32
+! CHECK-NOT:     llvm.intr.assume
 ! CHECK:         return
 subroutine test_inapplicable_assume()
   !$omp metadirective &
@@ -47,7 +49,9 @@ end subroutine
 
 ! An unselected fallback must not have its clauses lowered.
 ! CHECK-LABEL: func.func @_QPtest_unselected_fallback_clause()
+! CHECK-NOT:     llvm.intr.assume
 ! CHECK:         omp.barrier
+! CHECK-NOT:     llvm.intr.assume
 ! CHECK:         return
 subroutine test_unselected_fallback_clause()
   !$omp metadirective &
@@ -62,7 +66,9 @@ end subroutine
 ! A statically applicable but lower-ranked candidate must not have its clauses
 ! lowered either.
 ! CHECK-LABEL: func.func @_QPtest_unselected_ranked_clause()
+! CHECK-NOT:     llvm.intr.assume
 ! CHECK:         omp.barrier
+! CHECK-NOT:     llvm.intr.assume
 ! CHECK:         return
 subroutine test_unselected_ranked_clause()
   !$omp metadirective &
