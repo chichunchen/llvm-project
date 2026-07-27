@@ -1767,6 +1767,7 @@ void OmpStructureChecker::Enter(const parser::OmpBeginDirective &x) {
   case llvm::omp::Directive::OMPD_metadirective:
     // Delimited METADIRECTIVE
     EnterDirectiveNest(MetadirectiveNest);
+    BeginMetadirectiveSelection();
     break;
   default:
     break;
@@ -1781,6 +1782,7 @@ void OmpStructureChecker::Leave(const parser::OmpBeginDirective &x) {
     break;
   case llvm::omp::Directive::OMPD_metadirective:
     // Delimited METADIRECTIVE
+    EndMetadirectiveSelection(x.Clauses());
     ExitDirectiveNest(MetadirectiveNest);
     break;
   default:

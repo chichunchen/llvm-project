@@ -754,11 +754,53 @@ void OmpStructureChecker::Leave(const parser::OmpDirectiveSpecification &x) {
   }
 }
 
-void OmpStructureChecker::Enter(const parser::OmpMetadirectiveDirective &x) {
-  EnterDirectiveNest(MetadirectiveNest);
+void OmpStructureChecker::BeginMetadirectiveSelection() {
+  metadirectiveSelectionStarts_.push_back(metadirectiveLoopVariants_.size());
 }
 
-void OmpStructureChecker::Leave(const parser::OmpMetadirectiveDirective &) {
+void OmpStructureChecker::EndMetadirectiveSelection(
+    const parser::OmpClauseList &clauses) {
+  CHECK(!metadirectiveSelectionStarts_.empty());
+  std::size_t firstVariant{metadirectiveSelectionStarts_.back()};
+  metadirectiveSelectionStarts_.pop_back();
+  if (firstVariant == metadirectiveLoopVariants_.size()) {
+    return;
+  }
+
+  llvm::SmallVector<llvm::omp::TraitProperty, 8> constructTraits;
+  for (const LoopOrConstruct &item : constructStack_) {
+    if (const auto *construct{
+            std::get_if<const parser::OpenMPConstruct *>(&item)}) {
+      AppendConstructTraitsForDirective(
+          parser::omp::GetOmpDirectiveName(**construct).v, constructTraits);
+    }
+  }
+  OmpVariantMatchContext matchContext{context_, constructTraits};
+  std::optional<MetadirectiveCandidateSet> candidateSet{
+      BuildMetadirectiveCandidateSet(clauses, context_, matchContext)};
+  if (!candidateSet) {
+    // Keep every variant when selection cannot yet model a selector.
+    return;
+  }
+
+  llvm::SmallVector<const parser::OmpDirectiveSpecification *, 4> reachable{
+      GetReachableMetadirectiveVariants(*candidateSet, matchContext)};
+  auto first{metadirectiveLoopVariants_.begin() + firstVariant};
+  metadirectiveLoopVariants_.erase(
+      std::remove_if(first, metadirectiveLoopVariants_.end(),
+          [&](const MetadirectiveLoopVariant &variant) {
+            return !llvm::is_contained(reachable, variant.spec);
+          }),
+      metadirectiveLoopVariants_.end());
+}
+
+void OmpStructureChecker::Enter(const parser::OmpMetadirectiveDirective &x) {
+  EnterDirectiveNest(MetadirectiveNest);
+  BeginMetadirectiveSelection();
+}
+
+void OmpStructureChecker::Leave(const parser::OmpMetadirectiveDirective &x) {
+  EndMetadirectiveSelection(x.v.Clauses());
   ExitDirectiveNest(MetadirectiveNest);
 }
 

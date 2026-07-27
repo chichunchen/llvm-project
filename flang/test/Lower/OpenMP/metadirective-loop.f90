@@ -191,6 +191,54 @@ subroutine test_inapplicable_do_in_parallel(n, a, after)
   !$omp end parallel
 end subroutine
 
+! A lower-ranked loop variant is unreachable after an unguarded standalone
+! variant is selected, so it does not impose loop-only lowering restrictions.
+! CHECK-LABEL: func.func @_QPtest_unselected_do_in_parallel(
+! CHECK:         omp.parallel
+! CHECK:           omp.barrier
+! CHECK-NOT:       omp.wsloop
+! CHECK-NOT:       omp.loop_nest
+! CHECK:           fir.do_loop
+! CHECK:             hlfir.assign
+! CHECK-NOT:       fir.do_loop
+! CHECK:           omp.terminator
+! CHECK:         return
+subroutine test_unselected_do_in_parallel(n, a)
+  integer :: n, a(n), i
+  !$omp parallel num_threads(1) shared(n, a)
+  !$omp metadirective &
+  !$omp & when(user={condition(score(2): .true.)}: barrier) &
+  !$omp & when(user={condition(score(1): .true.)}: do) &
+  !$omp & otherwise(nothing)
+  do i = 1, n
+    a(i) = i
+  end do
+  !$omp end parallel
+end subroutine
+
+! An unreachable loop variant likewise does not turn a statically selected
+! block variant into a mixed-association metadirective.
+! CHECK-LABEL: func.func @_QPtest_unselected_do_with_block_variant(
+! CHECK-NOT:     omp.wsloop
+! CHECK-NOT:     omp.loop_nest
+! CHECK:         omp.parallel
+! CHECK:           fir.do_loop
+! CHECK:             hlfir.assign
+! CHECK-NOT:       fir.do_loop
+! CHECK:           omp.terminator
+! CHECK:         return
+subroutine test_unselected_do_with_block_variant(n, a)
+  integer :: n, a(n), i
+  !$omp begin metadirective &
+  !$omp & when(user={condition(score(2): .true.)}: parallel) &
+  !$omp & when(user={condition(score(1): .true.)}: do) &
+  !$omp & otherwise(nothing)
+  do i = 1, n
+    a(i) = i
+  end do
+  !$omp end metadirective
+end subroutine
+
 ! CHECK-LABEL: func.func @_QPtest_dynamic_loop(
 ! CHECK:         fir.if {{.*}} {
 ! CHECK:           omp.wsloop

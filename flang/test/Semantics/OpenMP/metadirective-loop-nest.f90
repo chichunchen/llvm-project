@@ -275,3 +275,53 @@ subroutine loop_in_if_branch(n, a, flag)
     end do
   end if
 end subroutine
+
+subroutine unreachable_ranked_collapse(n, a)
+  integer :: n, a(n), i
+  !$omp metadirective &
+  !$omp& when(user={condition(score(2): .true.)}: do) &
+  !$omp& when(user={condition(score(1): .true.)}: do collapse(2)) &
+  !$omp& default(nothing)
+  do i = 1, n
+    a(i) = i
+  end do
+end subroutine
+
+subroutine unreachable_ranked_iteration_variable(n, a)
+  integer :: n, a(n)
+  real :: i
+  !$omp metadirective &
+  !$omp& when(user={condition(score(2): .true.)}: nothing) &
+  !$omp& when(user={condition(score(1): .true.)}: do) &
+  !$omp& default(nothing)
+  do i = 1, n
+    a(int(i)) = int(i)
+  end do
+end subroutine
+
+subroutine unreachable_ranked_interrupted_association(n, a)
+  integer :: n, a(n), i
+  integer, save :: x
+  !$omp metadirective &
+  !$omp& when(user={condition(score(2): .true.)}: nothing) &
+  !$omp& when(user={condition(score(1): .true.)}: do) &
+  !$omp& default(nothing)
+  !$omp threadprivate(x)
+  do i = 1, n
+    a(i) = i
+  end do
+end subroutine
+
+subroutine dynamic_ranked_collapse(n, a, flag)
+  integer :: n, a(n), i
+  logical :: flag
+  !$omp metadirective &
+  !$omp& when(user={condition(score(2): flag)}: nothing) &
+  !ERROR: This construct requires a nest of depth 2, but the associated nest is a nest of depth 1
+  !BECAUSE: COLLAPSE clause was specified with argument 2
+  !$omp& when(user={condition(score(1): .true.)}: do collapse(2)) &
+  !$omp& default(nothing)
+  do i = 1, n
+    a(i) = i
+  end do
+end subroutine

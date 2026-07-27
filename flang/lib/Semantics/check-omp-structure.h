@@ -308,6 +308,8 @@ private:
   void EndMetadirectiveVariantScope();
 
   // check-omp-variant.cpp
+  void BeginMetadirectiveSelection();
+  void EndMetadirectiveSelection(const parser::OmpClauseList &);
   void CheckMetadirectiveVariantsWithoutLoop(std::size_t firstVariant = 0);
   void CheckOmpDeclareVariantDirective(
       const parser::OmpDeclareVariantDirective &);
@@ -538,6 +540,7 @@ private:
   };
   std::vector<MetadirectiveLoopVariant> metadirectiveLoopVariants_;
   std::vector<std::size_t> metadirectiveVariantScopeStarts_;
+  std::vector<std::size_t> metadirectiveSelectionStarts_;
   const parser::traits::OmpContextSelectorSpecification *currentWhenSelector_{
       nullptr};
 

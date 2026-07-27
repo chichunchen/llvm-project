@@ -5840,22 +5840,6 @@ static void genOMP(lower::AbstractConverter &converter, lower::SymMap &symTable,
 }
 
 namespace {
-struct MetadirectiveCandidate {
-  MetadirectiveCandidate(const parser::OmpDirectiveSpecification *spec,
-                         llvm::omp::VariantMatchInfo vmi, bool isExplicit,
-                         std::optional<semantics::omp::DynamicUserCondition>
-                             dynamicCond = std::nullopt,
-                         bool conditionShouldBeTrue = true)
-      : spec(spec), vmi(vmi), isExplicit(isExplicit), dynamicCond(dynamicCond),
-        conditionShouldBeTrue(conditionShouldBeTrue) {}
-
-  const parser::OmpDirectiveSpecification *spec = nullptr;
-  llvm::omp::VariantMatchInfo vmi;
-  bool isExplicit = false;
-  std::optional<semantics::omp::DynamicUserCondition> dynamicCond;
-  bool conditionShouldBeTrue = true;
-};
-
 struct SplicedAssociatedEvaluations {
   using Iterator = lower::pft::EvaluationList::iterator;
 
@@ -6158,49 +6142,16 @@ static void genMetadirective(lower::AbstractConverter &converter,
   semantics::omp::OmpVariantMatchContext ompCtx =
       makeVariantMatchContext(builder.getModule(), constructTraits);
 
-  llvm::SmallVector<MetadirectiveCandidate, 4> candidates;
-  // A null directive specification represents either the implicit `nothing`
-  // variant or the absence of an explicit otherwise/default clause.
-  const parser::OmpDirectiveSpecification *fallback = nullptr;
-
-  // Extract the context-selector that controls whether a WHEN variant is
-  // applicable. Modifier validation requires exactly one selector per clause.
-  auto getContextSelector = [](const parser::OmpClause::When &whenClause)
-      -> const parser::modifier::OmpContextSelector & {
-    const auto &modifiers = std::get<0>(whenClause.v.t);
-    assert(modifiers && modifiers->size() == 1 &&
-           "WHEN clause should contain one context-selector");
-    return std::get<parser::modifier::OmpContextSelector>(modifiers->front().u);
-  };
-
-  // Extract the directive variant spec from a when clause.
-  // Returns {spec_ptr, isExplicit}. A null spec means "nothing".
-  auto getDirectiveVariant = [](const parser::OmpClause::When &whenClause)
-      -> std::pair<const parser::OmpDirectiveSpecification *, bool> {
-    const auto &opt = std::get<1>(whenClause.v.t);
-    if (!opt)
-      return {nullptr, false};
-    if (opt->value().DirId() == llvm::omp::Directive::OMPD_nothing)
-      return {nullptr, true};
-    return {&opt->value(), true};
-  };
-
-  // Return the directive spec pointer, or nullptr for "nothing".
-  auto getFallbackVariant = [](const parser::OmpDirectiveSpecification &spec)
-      -> const parser::OmpDirectiveSpecification * {
-    if (spec.DirId() == llvm::omp::Directive::OMPD_nothing)
-      return nullptr;
-    return &spec;
-  };
-
+  // Lowering does not yet support every selector feature accepted by
+  // semantics. Diagnose those before building the shared selection plan.
   for (const auto &clause : clauseList.v) {
     if (const auto *whenClause =
             std::get_if<parser::OmpClause::When>(&clause.u)) {
-      const auto &ctxSel = getContextSelector(*whenClause);
-      auto [spec, isExplicit] = getDirectiveVariant(*whenClause);
-
-      // METADIRECTIVE cannot yet honour some selector features that are
-      // otherwise accepted; reject them before building the match info.
+      const auto &modifiers = std::get<0>(whenClause->v.t);
+      assert(modifiers && modifiers->size() == 1 &&
+             "WHEN clause should contain one context-selector");
+      const auto &ctxSel =
+          std::get<parser::modifier::OmpContextSelector>(modifiers->front().u);
       switch (semantics::omp::FindUnsupportedSelectorFeature(ctxSel, semaCtx)) {
       case semantics::omp::UnsupportedSelectorFeature::TargetDevice:
         TODO(converter.genLocation(clause.source),
@@ -6214,133 +6165,30 @@ static void genMetadirective(lower::AbstractConverter &converter,
       case semantics::omp::UnsupportedSelectorFeature::None:
         break;
       }
-
-      llvm::omp::VariantMatchInfo rawVMI;
-      std::optional<semantics::omp::DynamicUserCondition> dynamicCond =
-          semantics::omp::MakeVariantMatchInfo(rawVMI, ctxSel, semaCtx);
-
-      if (dynamicCond) {
-        constexpr llvm::omp::TraitProperty dynamicConditionTrait =
-            llvm::omp::TraitProperty::user_condition_unknown;
-        constexpr llvm::omp::TraitProperty matchAnyTrait =
-            llvm::omp::TraitProperty::implementation_extension_match_any;
-        constexpr llvm::omp::TraitProperty matchNoneTrait =
-            llvm::omp::TraitProperty::implementation_extension_match_none;
-
-        // Static applicability must only use traits known at lowering time.
-        // For example, in
-        //   when(implementation={vendor(llvm)},
-        //        user={condition(score(5): flag)}: barrier)
-        // vendor(llvm) can be checked now, but flag cannot. Drop the
-        // runtime-only user_condition_unknown for applicability, while keeping
-        // score(5) so ranking can still honor the user-condition selector.
-        llvm::omp::VariantMatchInfo staticVMI = rawVMI;
-        std::optional<llvm::APInt> conditionScore;
-        auto scoreIt = staticVMI.ScoreMap.find(dynamicConditionTrait);
-        if (scoreIt != staticVMI.ScoreMap.end()) {
-          conditionScore = scoreIt->second;
-          staticVMI.ScoreMap.erase(scoreIt);
-        }
-        staticVMI.RequiredTraits.reset(unsigned(dynamicConditionTrait));
-        llvm::APInt *conditionScorePtr =
-            conditionScore ? &*conditionScore : nullptr;
-
-        bool hasMatchAny = rawVMI.RequiredTraits.test(unsigned(matchAnyTrait));
-        bool hasMatchNone =
-            rawVMI.RequiredTraits.test(unsigned(matchNoneTrait));
-        bool isStaticVMIApplicable =
-            llvm::omp::isVariantApplicableInContext(staticVMI, ompCtx);
-        // If staticVMI does not match, only match_any can still apply. Check
-        // conditionTrueVMI because the runtime condition may satisfy match_any.
-        if (!isStaticVMIApplicable) {
-          if (!hasMatchAny || staticVMI.RequiredTraits.test(
-                                  unsigned(llvm::omp::TraitProperty::invalid)))
-            continue;
-
-          llvm::omp::VariantMatchInfo conditionTrueVMI = staticVMI;
-          conditionTrueVMI.addTrait(
-              llvm::omp::TraitProperty::user_condition_true, "<condition>",
-              conditionScorePtr);
-          if (!llvm::omp::isVariantApplicableInContext(conditionTrueVMI,
-                                                       ompCtx))
-            continue;
-        }
-
-        auto addConditionTraitForRanking =
-            [&](llvm::omp::VariantMatchInfo &rankingVMI) {
-              rankingVMI.addTrait(
-                  hasMatchNone ? dynamicConditionTrait
-                               : llvm::omp::TraitProperty::user_condition_true,
-                  "<condition>", conditionScorePtr);
-            };
-
-        if (hasMatchAny && isStaticVMIApplicable) {
-          // A statically matched match_any selector needs two candidates: a
-          // guarded candidate with the user condition and score, and an
-          // unguarded candidate with only the statically matched traits. If the
-          // when clause omits its directive, only add the unguarded candidate.
-          if (isExplicit) {
-            llvm::omp::VariantMatchInfo conditionTrueVMI = staticVMI;
-            addConditionTraitForRanking(conditionTrueVMI);
-            candidates.emplace_back(spec, conditionTrueVMI, isExplicit,
-                                    dynamicCond);
-          }
-          candidates.emplace_back(spec, staticVMI, isExplicit);
-          continue;
-        }
-
-        llvm::omp::VariantMatchInfo rankingVMI = staticVMI;
-        // An omitted directive is implicit nothing, so do not let the runtime
-        // condition raise its rank. Explicit `nothing` is still a variant.
-        if (!isExplicit && hasMatchAny && !isStaticVMIApplicable)
-          rankingVMI = llvm::omp::VariantMatchInfo();
-        else if (isExplicit)
-          addConditionTraitForRanking(rankingVMI);
-        candidates.emplace_back(spec, rankingVMI, isExplicit, dynamicCond,
-                                /*conditionShouldBeTrue=*/!hasMatchNone);
-        continue;
-      }
-
-      if (!llvm::omp::isVariantApplicableInContext(rawVMI, ompCtx))
-        continue;
-
-      candidates.emplace_back(spec, rawVMI, isExplicit);
-    } else if (const auto *otherwiseClause =
-                   std::get_if<parser::OmpClause::Otherwise>(&clause.u)) {
-      if (otherwiseClause->v && otherwiseClause->v->v)
-        fallback = getFallbackVariant(otherwiseClause->v->v->value());
-    } else if (const auto *defaultClause =
-                   std::get_if<parser::OmpClause::Default>(&clause.u)) {
-      if (const auto *dirSpecPtr = std::get_if<
-              common::Indirection<parser::OmpDirectiveSpecification>>(
-              &defaultClause->v.u))
-        fallback = getFallbackVariant(dirSpecPtr->value());
     }
   }
 
-  const parser::OmpDirectiveSpecification *nestedLoopVariant = nullptr;
-  for (const MetadirectiveCandidate &candidate : candidates) {
-    if (candidate.spec &&
-        hasDirectiveAssociation(candidate.spec->DirId(),
-                                llvm::omp::Association::LoopNest)) {
-      nestedLoopVariant = candidate.spec;
-      break;
-    }
-  }
-  if (!nestedLoopVariant && fallback &&
-      hasDirectiveAssociation(fallback->DirId(),
-                              llvm::omp::Association::LoopNest))
-    nestedLoopVariant = fallback;
-  // Name resolution cannot give a metadirective variant its own DSA scope, so
-  // a selectable loop variant's loop-IV attribute can otherwise contaminate
-  // an enclosing data environment.
-  if (nestedLoopVariant &&
-      isNestedInOpenMPDataEnvironment(
-          eval, builder.getInsertionBlock()->getParentOp()))
-    TODO(converter.genLocation(nestedLoopVariant->source),
-         "loop-associated METADIRECTIVE nested in an OpenMP data environment");
+  std::optional<semantics::omp::MetadirectiveCandidateSet> candidateSet =
+      semantics::omp::BuildMetadirectiveCandidateSet(clauseList, semaCtx,
+                                                     ompCtx);
+  assert(candidateSet && "unsupported selector reached candidate planning");
+  auto &candidates = candidateSet->candidates;
+  const parser::OmpDirectiveSpecification *fallback = candidateSet->fallback;
 
-  bool hasLoopAssociatedCandidate = nestedLoopVariant != nullptr;
+  llvm::SmallVector<unsigned, 4> allCandidateIndices;
+  allCandidateIndices.reserve(candidates.size());
+  for (unsigned idx = 0, end = candidates.size(); idx < end; ++idx)
+    allCandidateIndices.push_back(idx);
+
+  llvm::SmallVector<const parser::OmpDirectiveSpecification *, 4>
+      reachableVariantSpecs = semantics::omp::GetReachableMetadirectiveVariants(
+          *candidateSet, ompCtx);
+
+  bool hasLoopAssociatedCandidate =
+      llvm::any_of(reachableVariantSpecs, [](const auto *spec) {
+        return spec && hasDirectiveAssociation(
+                           spec->DirId(), llvm::omp::Association::LoopNest);
+      });
   SplicedAssociatedEvaluations splicedAssociatedEvaluations;
   lower::pft::Evaluation *associatedLoopEval = nullptr;
   llvm::scope_exit restoreEvaluationOwnership([&]() {
@@ -6417,6 +6265,13 @@ static void genMetadirective(lower::AbstractConverter &converter,
     bool hasLoopAssociation =
         hasDirectiveAssociation(queue, llvm::omp::Association::LoopNest);
     if (hasLoopAssociation) {
+      // Name resolution cannot give a metadirective variant its own DSA
+      // scope, so marking its loop IV can otherwise contaminate an enclosing
+      // data environment.
+      if (isNestedInOpenMPDataEnvironment(
+              eval, builder.getInsertionBlock()->getParentOp()))
+        TODO(variantLoc, "loop-associated METADIRECTIVE nested in an OpenMP "
+                         "data environment");
       if (hasUnsupportedDataEnvironmentDirective(queue))
         TODO(variantLoc,
              "data-environment construct in loop-associated METADIRECTIVE "
@@ -6481,46 +6336,7 @@ static void genMetadirective(lower::AbstractConverter &converter,
       genMetadirectiveBody();
   };
 
-  auto selectBestCandidate =
-      [](llvm::ArrayRef<unsigned> candidateIndices,
-         llvm::ArrayRef<MetadirectiveCandidate> candidates,
-         const semantics::omp::OmpVariantMatchContext &ompCtx)
-      -> std::optional<unsigned> {
-    if (candidateIndices.empty())
-      return std::nullopt;
-    if (candidateIndices.size() == 1)
-      return candidateIndices.front();
-
-    // The OpenMP context scorer preserves input order for tied candidates.
-    // Put explicit variants first so they take precedence over implicit
-    // `nothing`, as required by metadirective selection.
-    llvm::SmallVector<unsigned, 4> candidateOrder;
-    candidateOrder.reserve(candidateIndices.size());
-    for (unsigned idx : candidateIndices)
-      if (candidates[idx].isExplicit)
-        candidateOrder.push_back(idx);
-    for (unsigned idx : candidateIndices)
-      if (!candidates[idx].isExplicit)
-        candidateOrder.push_back(idx);
-
-    llvm::SmallVector<llvm::omp::VariantMatchInfo, 4> orderedVMIs;
-    orderedVMIs.reserve(candidateOrder.size());
-    for (unsigned idx : candidateOrder)
-      orderedVMIs.push_back(candidates[idx].vmi);
-
-    int bestIdx = llvm::omp::getBestVariantMatchForContext(orderedVMIs, ompCtx);
-    if (bestIdx >= 0) {
-      assert(static_cast<size_t>(bestIdx) < candidateOrder.size() &&
-             "best variant index out of range");
-      return candidateOrder[bestIdx];
-    }
-    return std::nullopt;
-  };
-
-  llvm::SmallVector<unsigned, 4> remainingCandidates;
-  remainingCandidates.reserve(candidates.size());
-  for (unsigned idx = 0, end = candidates.size(); idx < end; ++idx)
-    remainingCandidates.push_back(idx);
+  llvm::SmallVector<unsigned, 4> remainingCandidates{allCandidateIndices};
 
   lower::StatementContext stmtCtx;
 
@@ -6541,14 +6357,16 @@ static void genMetadirective(lower::AbstractConverter &converter,
   // Stop when selection reaches an unguarded candidate or the fallback.
   while (!remainingCandidates.empty()) {
     std::optional<unsigned> selected =
-        selectBestCandidate(remainingCandidates, candidates, ompCtx);
+        semantics::omp::SelectBestMetadirectiveCandidate(remainingCandidates,
+                                                         candidates, ompCtx);
     if (!selected) {
       genVariant(fallback);
       return;
     }
 
-    const MetadirectiveCandidate &candidate = candidates[*selected];
-    if (!candidate.dynamicCond) {
+    const semantics::omp::MetadirectiveCandidate &candidate =
+        candidates[*selected];
+    if (!candidate.dynamicCondition) {
       genVariant(candidate.spec);
       return;
     }
@@ -6566,10 +6384,11 @@ static void genMetadirective(lower::AbstractConverter &converter,
     //   if (flag) barrier    into just    barrier
     //   else barrier
     if (std::optional<unsigned> selectedInElse =
-            selectBestCandidate(elsePathCandidates, candidates, ompCtx)) {
-      const MetadirectiveCandidate &candidateInElse =
+            semantics::omp::SelectBestMetadirectiveCandidate(
+                elsePathCandidates, candidates, ompCtx)) {
+      const semantics::omp::MetadirectiveCandidate &candidateInElse =
           candidates[*selectedInElse];
-      if (!candidateInElse.dynamicCond &&
+      if (!candidateInElse.dynamicCondition &&
           candidateInElse.spec == candidate.spec) {
         genVariant(candidate.spec);
         return;
@@ -6580,14 +6399,14 @@ static void genMetadirective(lower::AbstractConverter &converter,
     // generated region. They cannot be reused for both sides of a runtime
     // selection until each arm can receive an independent block mapping.
     if (associatedLoopEval && associatedLoopEval->lowerAsUnstructured())
-      TODO(converter.genLocation(candidate.dynamicCond->source),
+      TODO(converter.genLocation(candidate.dynamicCondition->source),
            "unstructured associated DO in loop-associated METADIRECTIVE "
            "variant");
 
     mlir::Location condLoc =
-        converter.genLocation(candidate.dynamicCond->source);
+        converter.genLocation(candidate.dynamicCondition->source);
     const auto *condExpr =
-        semantics::GetExpr(semaCtx, *candidate.dynamicCond->expr);
+        semantics::GetExpr(semaCtx, *candidate.dynamicCondition->expr);
     assert(condExpr && "missing expression for user condition");
     mlir::Value condVal =
         fir::getBase(converter.genExprValue(*condExpr, stmtCtx, &condLoc));
