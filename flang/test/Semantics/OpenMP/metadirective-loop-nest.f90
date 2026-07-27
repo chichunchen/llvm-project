@@ -288,6 +288,69 @@ subroutine loop_in_if_branch(n, a, flag)
   end if
 end subroutine
 
+subroutine noninteger_iteration_variable(n, a)
+  integer :: n, a(n)
+  real :: i
+  !$omp metadirective when(implementation={vendor(llvm)}: do) default(nothing)
+  !ERROR: The DO loop iteration variable must be of integer type
+  do i = 1, n
+    a(int(i)) = int(i)
+  end do
+end subroutine
+
+subroutine noninteger_collapsed_iteration_variables(n, a)
+  integer :: n, a(n, n)
+  real :: i, j
+  !$omp metadirective when(implementation={vendor(llvm)}: do collapse(2)) default(nothing)
+  !ERROR: The DO loop iteration variable must be of integer type
+  do i = 1, n
+    !ERROR: The DO loop iteration variable must be of integer type
+    do j = 1, n
+      a(int(j), int(i)) = int(i)
+    end do
+  end do
+end subroutine
+
+subroutine threadprivate_iteration_variable(n, a)
+  integer :: n, a(n)
+  integer, save :: i
+  !$omp threadprivate(i)
+  !$omp metadirective when(implementation={vendor(llvm)}: do) default(nothing)
+  !ERROR: Loop iteration variable of an affected loop cannot be THREADPRIVATE
+  do i = 1, n
+    a(i) = i
+  end do
+end subroutine
+
+subroutine invalid_iteration_variable_dsa(n, a)
+  integer :: n, a(n), i
+  !ERROR: Loop iteration variable with a predetermined data sharing attribute cannot appear in a FIRSTPRIVATE clause
+  !$omp metadirective when(implementation={vendor(llvm)}: do firstprivate(i)) default(nothing)
+  !BECAUSE: 'i' is an iteration variable of an affected loop
+  do i = 1, n
+    a(i) = i
+  end do
+end subroutine
+
+! An invalid iteration variable in a variant that cannot be selected on this
+! target does not constrain the program.
+subroutine dead_variant_noninteger_iteration_variable(n, a)
+  integer :: n, a(n)
+  real :: i
+  !$omp metadirective when(device={kind(nohost)}: do) default(nothing)
+  do i = 1, n
+    a(int(i)) = int(i)
+  end do
+end subroutine
+
+subroutine dead_variant_invalid_iteration_variable_dsa(n, a)
+  integer :: n, a(n), i
+  !$omp metadirective when(device={kind(nohost)}: do firstprivate(i)) default(nothing)
+  do i = 1, n
+    a(i) = i
+  end do
+end subroutine
+
 subroutine unreachable_ranked_collapse(n, a)
   integer :: n, a(n), i
   !$omp metadirective &

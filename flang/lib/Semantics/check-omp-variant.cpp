@@ -28,6 +28,7 @@
 #include "flang/Semantics/tools.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Frontend/OpenMP/OMP.h"
 
 #include <algorithm>
@@ -865,6 +866,7 @@ void OmpStructureChecker::Enter(const parser::ExecutionPartConstruct &x) {
   // Build the matching context once for the static-applicability gate below.
   OmpVariantMatchContext matchContext{context_};
   UnorderedSymbolSet defaultNoneDiagnosed;
+  llvm::SmallSetVector<const parser::DoConstruct *, 4> affectedDoLoops;
 
   for (const MetadirectiveLoopVariant &variant : variants) {
     const parser::OmpDirectiveSpecification *spec{variant.spec};
@@ -877,6 +879,11 @@ void OmpStructureChecker::Enter(const parser::ExecutionPartConstruct &x) {
     if (assoc == llvm::omp::Association::LoopNest) {
       if (!checkRootLoopCanonical(*spec, /*isSequence=*/false)) {
         continue;
+      }
+      if (auto loops{CollectAffectedDoLoops(*spec, x, version, &context_)}) {
+        CheckIterationVariableDataSharingClauses(
+            *spec, *loops, /*requireResolvedDSA=*/false);
+        affectedDoLoops.insert(loops->begin(), loops->end());
       }
 
       // A standalone metadirective does not contain its associated loop in
@@ -905,9 +912,16 @@ void OmpStructureChecker::Enter(const parser::ExecutionPartConstruct &x) {
         CheckRectangularNest(*spec, sequence);
       }
     } else if (assoc == llvm::omp::Association::LoopSeq) {
-      (void)checkRootLoopCanonical(*spec, /*isSequence=*/true);
+      if (checkRootLoopCanonical(*spec, /*isSequence=*/true)) {
+        if (auto loops{CollectAffectedDoLoops(*spec, x, version, &context_)}) {
+          CheckIterationVariableDataSharingClauses(
+              *spec, *loops, /*requireResolvedDSA=*/false);
+          affectedDoLoops.insert(loops->begin(), loops->end());
+        }
+      }
     }
   }
+  CheckIterationVariableRestrictions(affectedDoLoops.getArrayRef());
 }
 
 // Diagnose loop-associated metadirective variants that are not followed by a

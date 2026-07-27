@@ -465,6 +465,13 @@ std::optional<std::vector<const parser::DoConstruct *>> CollectAffectedDoLoops(
     const parser::OpenMPLoopConstruct &x, unsigned version,
     SemanticsContext *semaCtx = nullptr);
 
+/// Collect the set of DO loops in \p root that would be directly affected by
+/// \p spec when it is selected as a metadirective replacement.
+std::optional<std::vector<const parser::DoConstruct *>> CollectAffectedDoLoops(
+    const parser::OmpDirectiveSpecification &spec,
+    const parser::ExecutionPartConstruct &root, unsigned version,
+    SemanticsContext *semaCtx = nullptr);
+
 /// Returns whether the loop nest associated with `x` is a doacross loop nest,
 /// i.e. its body contains an `ordered` directive carrying a doacross
 /// dependence (the `doacross` clause, or the pre-5.2 `depend(sink/source)`

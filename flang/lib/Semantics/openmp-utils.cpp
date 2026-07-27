@@ -1636,11 +1636,10 @@ bool IsDoacrossAffected(const parser::OpenMPLoopConstruct &x) {
 /// The k DO loop is affected by the DO construct [2].
 /// For the top-level DO COLLAPSE(5) construct, the k loop is the only
 /// directly affected loop.
-std::optional<std::vector<const parser::DoConstruct *>> CollectAffectedDoLoops(
-    const parser::OpenMPLoopConstruct &x, unsigned version,
-    SemanticsContext *semaCtx) {
+static std::optional<std::vector<const parser::DoConstruct *>>
+CollectAffectedDoLoopsImpl(const parser::OmpDirectiveSpecification &spec,
+    const LoopSequence &sequence, unsigned version, SemanticsContext *semaCtx) {
   std::vector<const parser::DoConstruct *> result;
-  const parser::OmpDirectiveSpecification &spec{x.BeginDir()};
 
   auto [depth, _]{GetAffectedNestDepthWithReason(spec, version, semaCtx)};
 
@@ -1708,11 +1707,25 @@ std::optional<std::vector<const parser::DoConstruct *>> CollectAffectedDoLoops(
     return success && produced >= level;
   }};
 
-  LoopSequence sequence(std::get<parser::Block>(x.t), version, true, semaCtx);
   if (visit(sequence, visit)) {
     return result;
   }
   return std::nullopt;
+}
+
+std::optional<std::vector<const parser::DoConstruct *>> CollectAffectedDoLoops(
+    const parser::OpenMPLoopConstruct &x, unsigned version,
+    SemanticsContext *semaCtx) {
+  LoopSequence sequence{std::get<parser::Block>(x.t), version, true, semaCtx};
+  return CollectAffectedDoLoopsImpl(x.BeginDir(), sequence, version, semaCtx);
+}
+
+std::optional<std::vector<const parser::DoConstruct *>> CollectAffectedDoLoops(
+    const parser::OmpDirectiveSpecification &spec,
+    const parser::ExecutionPartConstruct &root, unsigned version,
+    SemanticsContext *semaCtx) {
+  LoopSequence sequence{root, version, true, semaCtx};
+  return CollectAffectedDoLoopsImpl(spec, sequence, version, semaCtx);
 }
 
 #ifdef EXPENSIVE_CHECKS

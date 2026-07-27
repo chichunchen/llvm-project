@@ -19,6 +19,7 @@
 #include "flang/Parser/parse-tree.h"
 #include "flang/Semantics/openmp-directive-sets.h"
 #include "flang/Semantics/semantics.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Frontend/OpenMP/OMP.h"
@@ -299,6 +300,12 @@ private:
   void CheckNestedConstruct(const parser::OpenMPLoopConstruct &x);
   const parser::Name GetLoopIndex(const parser::DoConstruct *x);
   void CheckIterationVariables(const parser::OpenMPLoopConstruct &x);
+  void CheckIterationVariableRestrictions(
+      llvm::ArrayRef<const parser::DoConstruct *> loops);
+  void CheckIterationVariableDataSharingClauses(
+      const parser::OmpDirectiveSpecification &spec,
+      llvm::ArrayRef<const parser::DoConstruct *> loops,
+      bool requireResolvedDSA);
   std::int64_t GetOrdCollapseLevel(const parser::OpenMPLoopConstruct &x);
   void CheckAssociatedLoopConstraints(const parser::OpenMPLoopConstruct &x);
   void CheckScanModifier(const parser::OmpClause::Reduction &x);
