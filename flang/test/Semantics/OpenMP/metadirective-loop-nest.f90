@@ -148,6 +148,18 @@ subroutine no_loop_before_stmt(a)
   a = 0
 end subroutine
 
+! An OpenMP declarative directive also interrupts the loop association.
+subroutine no_loop_before_declarative_directive(n, a)
+  integer :: n, a(n), i
+  integer, save :: x
+  !ERROR: This construct should contain a DO-loop or a loop-nest-generating construct
+  !$omp metadirective when(implementation={vendor(llvm)}: do) default(nothing)
+  !$omp threadprivate(x)
+  do i = 1, n
+    a(i) = i
+  end do
+end subroutine
+
 ! A variant that cannot be selected on this target needs no loop nest.
 subroutine no_loop_dead_variant()
   !$omp metadirective when(device={kind(nohost)}: do) default(nothing)
