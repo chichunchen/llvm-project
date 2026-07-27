@@ -6429,6 +6429,12 @@ static void genMetadirective(lower::AbstractConverter &converter,
         TODO(variantLoc,
              "loop-associated METADIRECTIVE variant other than DO, SIMD, or "
              "DO SIMD");
+      // Eager privatization requires a construct-scoped IV symbol with a host
+      // association, which name resolution cannot create for a
+      // metadirective-selected loop.
+      if (!enableDelayedPrivatization)
+        TODO(variantLoc,
+             "loop-associated METADIRECTIVE with eager privatization");
       lower::pft::Evaluation *loopEval = spliceAssociatedDoEval(eval);
       if (!loopEval)
         TODO(variantLoc, "loop-associated METADIRECTIVE without associated DO");
