@@ -4448,16 +4448,32 @@ static void handleDeclareVariantConstructTrait(DSAStackTy *Stack,
                                                OpenMPDirectiveKind DKind,
                                                bool ScopeEntry) {
   SmallVector<llvm::omp::TraitProperty, 8> Traits;
-  if (isOpenMPTargetExecutionDirective(DKind))
-    Traits.emplace_back(llvm::omp::TraitProperty::construct_target_target);
-  if (isOpenMPTeamsDirective(DKind))
-    Traits.emplace_back(llvm::omp::TraitProperty::construct_teams_teams);
-  if (isOpenMPParallelDirective(DKind))
-    Traits.emplace_back(llvm::omp::TraitProperty::construct_parallel_parallel);
-  if (isOpenMPWorksharingDirective(DKind))
-    Traits.emplace_back(llvm::omp::TraitProperty::construct_for_for);
-  if (isOpenMPSimdDirective(DKind))
-    Traits.emplace_back(llvm::omp::TraitProperty::construct_simd_simd);
+  for (OpenMPDirectiveKind Leaf : getLeafConstructsOrSelf(DKind)) {
+    switch (Leaf) {
+    case OMPD_target:
+      Traits.push_back(llvm::omp::TraitProperty::construct_target_target);
+      break;
+    case OMPD_teams:
+      Traits.push_back(llvm::omp::TraitProperty::construct_teams_teams);
+      break;
+    case OMPD_parallel:
+      Traits.push_back(llvm::omp::TraitProperty::construct_parallel_parallel);
+      break;
+    case OMPD_for:
+      Traits.push_back(llvm::omp::TraitProperty::construct_for_for);
+      break;
+    case OMPD_simd:
+      Traits.push_back(llvm::omp::TraitProperty::construct_simd_simd);
+      break;
+    case OMPD_dispatch:
+      Traits.push_back(llvm::omp::TraitProperty::construct_dispatch_dispatch);
+      break;
+    default:
+      // Constructs without a selector property still affect scoring depth.
+      Traits.push_back(llvm::omp::TraitProperty::invalid);
+      break;
+    }
+  }
   Stack->handleConstructTrait(Traits, ScopeEntry);
 }
 
