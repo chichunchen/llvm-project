@@ -2456,31 +2456,11 @@ static void AppendConstructTraitsForDirective(
 
 void AppendDirectiveContextTraits(llvm::omp::Directive directive,
     llvm::SmallVectorImpl<llvm::omp::TraitProperty> &constructTraits) {
-  using llvm::omp::Directive;
-  using llvm::omp::TraitProperty;
-
-  for (Directive leaf : llvm::omp::getLeafConstructsOrSelf(directive)) {
-    if (leaf == Directive::OMPD_nothing ||
-        leaf == Directive::OMPD_metadirective ||
-        leaf == Directive::OMPD_unknown || leaf == Directive::OMPD_section ||
-        leaf == Directive::OMPD_dispatch ||
-        llvm::omp::getDirectiveCategory(leaf) ==
-            llvm::omp::Category::Informational) {
-      continue;
-    }
-
-    llvm::omp::VariantMatchInfo vmi;
-    AppendConstructTraitsForDirective(leaf, vmi);
-    if (vmi.RequiredTraits.test(
-            static_cast<unsigned>(TraitProperty::construct_target_target))) {
+  for (llvm::omp::TraitProperty trait :
+      llvm::omp::getConstructTraits(directive)) {
+    if (trait == llvm::omp::TraitProperty::construct_target_target)
       constructTraits.clear();
-    }
-    if (vmi.ConstructTraits.empty()) {
-      constructTraits.push_back(TraitProperty::invalid);
-    } else {
-      constructTraits.append(
-          vmi.ConstructTraits.begin(), vmi.ConstructTraits.end());
-    }
+    constructTraits.push_back(trait);
   }
 }
 
